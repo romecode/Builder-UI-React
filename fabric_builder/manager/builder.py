@@ -991,7 +991,8 @@ class Manager():
             LOGGER.log_noTs('')
             LOGGER.log_noTs(e)
             return False
-
+        LOGGER.log_noTs("-done running pre deployment checks and cleanup")
+        LOGGER.log_noTs("")
                                           
         return True
     
