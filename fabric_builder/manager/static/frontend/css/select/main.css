@@ -1,0 +1,109 @@
+.main {
+  padding: 0 10px;
+  border: 1px dotted #969896;
+  border-radius: 0.3rem;
+  overflow: hidden;
+  height: 80vh;
+  overflow: scroll;
+  position: relative;
+}
+
+.selectable-selectbox {
+  z-index: 9000;
+  position: absolute;
+  cursor: default;
+  background: none;
+  border: 1px dashed grey;
+}
+
+.albums {
+  display: flex;
+  /*justify-content: space-between;*/
+  flex-wrap: wrap;
+  /* extra items per row to test horizontal scroll handler */
+/*   width: calc(150px * 10); */
+}
+
+.card-label {
+  display: block;
+  margin: 5px 0;
+  font-size: 12px;
+}
+
+.card-label > span {
+  font-weight: 600;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  position: relative;
+  width: 145px;
+  min-height: 125px;
+  margin: 2px;
+  float: left;
+  text-align: center;
+  border: 1px solid #ccc;
+  padding: 10px;
+  overflow: hidden;
+  border-radius: 0.3rem;
+}
+
+.item.not-selectable {
+  background: #819198;
+  color: white;
+}
+
+.item .tick {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 10px;
+  color: #5f6c70;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 6px;
+  line-height: 7px;
+}
+
+.item h2 {
+  font-size: 14px;
+  margin-top: 0;
+  margin-bottom: 0;
+  color: inherit;
+  font-weight: 600;
+}
+
+.item.selected {
+  background: #0FA0CE;
+  color: white;
+  border-color: #0FA0CE;
+}
+
+.item.not-selectable .tick,
+.item.selected .tick {
+  color: white;
+}
+
+.item.selecting {
+  border: 1px solid #0FA0CE;
+}
+
+.main p.not-selectable {
+  margin: 10px 0 10px 2px;
+}
+
+.counter {
+  color: #0FA0CE;
+}
+
+.selectable-button {
+  display: inline-block;
+  margin: 0 3px 10px 3px;
+}
+
+.in-selection-mode .item {
+  cursor: pointer;
+}
+

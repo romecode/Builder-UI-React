@@ -1,0 +1,49 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href='https://fonts.googleapis.com/css?family=Raleway:400,300,600' rel='stylesheet' type='text/css'>
+
+  <link rel="stylesheet" href="{% static "frontend/css/multistep/prog-tracker.css" %}">
+  <link rel="stylesheet" href="{% static "frontend/css/select/main.css" %}">
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css">
+  <link rel="stylesheet" href="{% static "frontend/css/custom.css" %}">
+  <title>Arista Configlet Deployment Manager</title>
+</head>
+<style>
+	a {
+	  display: block;
+	  margin: 5px 0;
+	}
+	.home .btn {
+	  width: 250px;
+	  margin: 5px 0;
+	}
+	.containerMain {
+
+      padding: 50px;
+
+	}
+	.containerRounded {
+      background: white;
+      border: lightgray solid 1px;
+      border-radius: .25em;
+
+	}
+</style>
+<body style="margin: 50px;background:url('/static/frontend/grey.png')">
+	
+	<div id="app">
+    <!-- React will load here -->
+    
+	</div>
+	
+    
+</body>
+<script src="{% static "frontend/index.js" %}"></script>
+
+</html>
+
+      

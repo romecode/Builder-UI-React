@@ -1,0 +1,22 @@
+.inputKey {
+	flex: 0 1 25% !important;
+}
+.wrapper {
+	padding: 15px;
+}
+
+.btn-toolbar > * + * { margin-left: .5em; }
+
+.btn-toolbar {justify-content: flex-end;}
+
+.left {justify-content: flex-start !important;}
+
+.selected.undeployed {
+	background: skyblue !important;
+}
+.selected.missing {
+	background: red !important;
+}
+.title, .title:hover{
+	color: black !important
+}
