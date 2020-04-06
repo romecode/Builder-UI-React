@@ -965,7 +965,7 @@ class Manager():
                         CVP.cvprac.api.delete_configlet(c['name'], c['key'])
                     if serialNumber in removeDevices:
                         self.last_deployed_var['compile_for'].remove(serialNumber)
-                        row = [row for row in self.last_deployed_var['device_vars']['Tab0']['data'] if row[0] == serialNumber]
+                        row = [row for row in self.last_deployed_var['device_vars']['Tab0']['data'] if row[0] == serialNumber][0]
                         self.last_deployed_var['device_vars']['Tab0']['data'].remove(row)
                     
                 except (CVP.CvpApiError) as e:
