@@ -52,11 +52,20 @@ def devices(request):
         devices.sort(key=lambda item: item['hostname'])
     except:
         devices = []
-        
-    
-    
     return JsonResponse(devices, safe=False)
 
+
+def leafs(request):
+    cvprac = CvpClient()
+    try:
+        config = Global_Config.objects.get(name='master').params
+        cvprac.connect(config['server'], config['user'], config['password'])
+        devices = cvprac.api.get_inventory()
+        devices.sort(key=lambda item: item['hostname'])
+        device = [d for d in devices if d not in config['spines']]
+    except:
+        devices = []
+    return JsonResponse(devices, safe=False)
 
 def index(request):
     

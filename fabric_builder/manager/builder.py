@@ -6,24 +6,29 @@ import datetime
 import xlrd
 import socket
 import json
+from manager.extensions import SwitchBase
 
 LOGGER = None
 CVP = None
 DEBUG = False
+
+from cvprac.cvp_client import CvpClient
+from cvprac.cvp_client_errors import CvpClientError
+from cvprac.cvp_client_errors import CvpApiError
 
 import os
 import django
 from django.conf import settings
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'fabric_builder.settings')
 django.setup()
-MODULE_DIR = os.path.dirname(__file__)
+MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 from manager.models import Deployment, Template, Global_Config
 from django.db import Error as dbError
         
            
 class Log():
     def __init__(self):
-        
         fabric_builder_log = open(MODULE_DIR + '/fabric_builder_log.txt', 'w')
         fabric_builder_log.close()
         
@@ -57,20 +62,11 @@ class Cvp():
 
         self.cvprac = None
         self.containerTree = {}
-        self.CvpApiError = None
         self.devices = {}
         self.host_to_device = {}
         self.containers = {}
         self.configlets = {}
         
-        
-        
-
-        from cvprac.cvp_client import CvpClient
-        from cvprac.cvp_client_errors import CvpClientError
-        from cvprac.cvp_client_errors import CvpApiError
-        self.CvpClientError = CvpClientError
-        self.CvpApiError = CvpApiError
         self.cvprac = CvpClient()
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) # to supress the warnings for https
         self.cvprac.connect(searchConfig('server'), searchConfig('user'), searchConfig('password'))
@@ -149,7 +145,7 @@ class Cvp():
     def deployDevice(self, device, container, configlets_to_deploy):
         try:
             ids = self.cvprac.api.deploy_device(device.cvp, container, configlets_to_deploy)
-        except self.CvpApiError as e:
+        except CvpApiError as e:
             LOGGER.log_noTs("---deploying device {0}: failed, could not get task id from CVP".format(device.hostname))
         else:
             ids = ','.join(map(str, ids['data']['taskIds']))
@@ -315,9 +311,10 @@ class Task():
             
                 
 
-class Switch():
+class Switch(SwitchBase):
     
     def __init__(self, params={}, cvpDevice={}):
+        super(Switch, self).__init__()
         #list to hold leaf compiled spine underlay interface init
         self.underlay_inject = []
         self.to_deploy = []
@@ -335,7 +332,6 @@ class Switch():
         
 
         MANAGER.DEVICES[self.serialNumber] = self
-        
         MANAGER.HOST_TO_DEVICE[self.hostname] = self
         
         if self.serialNumber in searchConfig('spines'):
@@ -379,115 +375,7 @@ class Switch():
             return ('',[])
         return template.compile(self)    
     
-    @property
-    def peer_desc(self, peer):
-        return "TO-{0}".format(peer.hostname)
-        
-    #===========================================================================
-    # @property    
-    # def mlag_address(self):
-    #     try:
-    #         neighbor = getByHostname(self.mlag_neighbor)
-    #         mgmt_ip = ip_address(unicode(self.mgmt_ip[:-3]))
-    #         neighbor_mgmt = ip_address(unicode(neighbor.mgmt_ip[:-3]))
-    #         global_mlag_address = ip_address(unicode(self.searchConfig('mlag_address')))
-    #         if mgmt_ip > neighbor_mgmt:
-    #             return global_mlag_address + 1
-    #         else:
-    #             return global_mlag_address
-    #     except:
-    #         return 'ERROR'
-    #     
-    # @property
-    # def mlag_peer_address(self):
-    #     try:
-    #         neighbor = getByHostname(self.mlag_neighbor)
-    #         return str(neighbor.mlag_address)
-    #     except:
-    #         return 'ERROR'
-    #===========================================================================
     
-    @property
-    def reload_delay_0(self):
-        if getattr(self, "is_jericho", None):
-            return self.searchConfig('reload_delay_jericho')[0]
-        else:
-            return self.searchConfig('reload_delay')[0]
-        
-    @property
-    def reload_delay_1(self):
-        if getattr(self, "is_jericho", None):
-            return self.searchConfig('reload_delay_jericho')[1]
-        else:
-            return self.searchConfig('reload_delay')[1]
-    
-    @property
-    def underlay(self):
-        #TODO!!!!
-        template = MANAGER.TEMPLATES.get('underlay_private')
-        i = 0
-        
-        if len(self.underlay_inject):
-            return "\n".join([t[0] for t in self.underlay_inject])
-        
-        for i, spine in enumerate(MANAGER.SPINES, start = 1):
-            #compile p2p link to spine
-            
-            try:
-                ipAddress = ip_address(unicode(getattr(self, "sp{0}_ip".format(i))))
-                spine_args = {
-                    "interface" : getattr(self, "sp{0}_int".format(i)),
-                    "address" : ipAddress,
-                    "interface_speed" : getattr(self, "sp{0}_speed".format(i), self.searchConfig('fabric_speed')),
-                    "description" : "TO-{0}-UNDERLAY Ethernet{1}".format(self.hostname, getattr(self, "lf{0}_int".format(i)))
-                }
-                spine.underlay_inject.append(template.compile(spine_args))
-                self_args = {
-                    "interface" : getattr(self, "lf{0}_int".format(i)),
-                    "address" : ipAddress + 1,
-                    "interface_speed" : getattr(self, "sp{0}_speed".format(i), self.searchConfig('fabric_speed')),
-                    "description" : "TO-{0}-UNDERLAY Ethernet{1}".format(spine.hostname, getattr(self, "sp{0}_int".format(i)))
-                }
-                self.underlay_inject.append(template.compile(self_args))
-                
-            except Exception as e:
-                LOGGER.log("-error building configlet section underlay for {0}<->{1}: {2}".format(spine.hostname, self.hostname, e))
-                sys.exit(0)
-            
-        return "\n".join(self.underlay_inject)
-
-    @property
-    def spine_asn(self):
-        if len(MANAGER.SPINES) >= 1:
-            return MANAGER.SPINES[0].asn
-        else:
-            return 'ERROR'
-
-          
-    @property
-    def spine_lo0_list(self):
-        return [spine.lo0 for spine in MANAGER.SPINES]
-    
-    @property
-    def spine_lo1_list(self):
-        return [spine.lo1 for spine in MANAGER.SPINES]
-    
-    @property
-    def spine_ipv4_list(self):
-        ipAddresses = []
-        for i, spine in enumerate(MANAGER.SPINES, start = 1):
-            #compile p2p link to spine
-            ipAddresses.append(getattr(self, "sp{0}_ip".format(i)))
-        return ipAddresses
-    
-    @property
-    def spine_hostname_list(self):
-        return [spine.hostname for spine in MANAGER.SPINES]
-    
-    @property
-    def vrf_ibgp_peer_address(self):
-        ip = self.searchConfig('vrf_ibgp_ip')
-        return ip_address(unicode(ip)) + 1 if ip else 'ERROR'
     
 class Math():
     def __init__(self, start, op, qty):
@@ -541,15 +429,14 @@ class Configlet():
         compiled = {}
         compiled['error'] = []
         iterables = parseForIterables(baseTemplate)
-        
-        
+
         for whitespace, template in iterables:
             
-            extractedTemplates = [v.strip('[]') for v in template.split('else')]
+            extractedTemplates = [v.strip('[]') for v in re.split('(?<=\])[\s]*else[\s]*(?=\[)',template)]
             #iteration for []else[]i.e. 2 at most
+
             for i, _template in enumerate(extractedTemplates):
                 valueDict = buildValueDict(source, _template)
-                
                 errorKeys = valueDict.pop('error')
                 if not errorKeys:
                     #values is a dict
@@ -622,7 +509,40 @@ class Configlet():
     #source can be either dict or object class i.e. getattr(CLASS, VALUE, None) or DICT.get(value,None)
     #will be used accordingly
     
-    
+    def compileTemplate(self, source, baseTemplate):
+        _baseTemplate = baseTemplate
+        compiled = {}
+        compiled['error'] = []
+        #now deal with the base template after sections/iterables are worked out
+        valueDict = buildValueDict(source, baseTemplate)
+        errorKeys = valueDict.pop('error')
+        if errorKeys:
+            compiled['error'] = errorKeys
+            #verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, ','.join(errorKeys)))
+            compiled[baseTemplate] = ''
+            return compiled
+        
+        #this is to sanitize and replace invalid keys in the format function    
+        _keys = []
+        for i, key in enumerate(valueDict.keys(), 0):
+            i = 'i'+str(i)
+            _baseTemplate = baseTemplate.replace('{'+key+'}', '{'+i+'}')
+            _keys.append(i)
+            
+        try:
+            compiled[baseTemplate] = _baseTemplate.format(**dict(zip(_keys, valueDict.values())))
+            return compiled
+        except KeyError as e:
+            #verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, e))
+            compiled['error'] = [e]
+            #must return a value which passes a boolean test
+            #we will usually get here if the parent configlet requires device @property functions but the 
+            #return ('', verbose)
+            compiled[baseTemplate] = ''
+            return compiled
+
+        
+        
     def compile(self, source):
         #TODO: Right now all the string replacements happen literally carrying the groups as the toReplace parameters
         #can definitely do this better
@@ -635,45 +555,62 @@ class Configlet():
             #has clause to enable/disable
             _section, _test = section
             __section = _section.strip('@')
-            compiledIterables = self.compileIterables(source, __section)
-            errorIterables = compiledIterables.pop('error')
+
+            
+            
             #test the "tests" arguments i.e @...@{tests}
             #parseCondition returns a (value, function) tuple the fn(value) will return true/false if the test passes
             #here we collect the key which failed a test
-
-            failedTests = [v[0] for v, fn in buildConditionTest(_test.strip('{}')) if not fn(*v, source = source)]
             
-            if _test and not (failedTests or errorIterables):
-                #there is a test and iterables with no errors -> COMPILE
-                for toReplace, compiled in compiledIterables.items():
-                    __section = __section.replace(toReplace, compiled)        
-            elif _test and failedTests:
-                #there is a test but failed WIPE
+            __test = _test.strip('{}')
+            
+            if len(__test):
+                failedTests = [v[0] for v, fn in buildConditionTest(__test) if not fn(*v, source = source)]
+            else:
+                failedTests = []
+                
+            
+            if len(__test) and failedTests:
+                #there is a test but failed -> WIPE
                 verbose.append("-skipping configlet section {0} in {1}: test condition for {2} failed".format(
                     re.sub(r"[\n\t\r]*", "", _section[:15]),
                     self.name,
                     ','.join(failedTests)
                 ))
-                __section = ''
-            elif compiledIterables and not errorIterables:
-                #there is no test, and all iterables passed COMPILE
-                for toReplace, compiled in compiledIterables.items():
-                    __section = __section.replace(toReplace, compiled) 
-            else:
-                #no test, iterables failed WIPE
-                for toReplace, errorKeys in errorIterables:
+                baseTemplate = baseTemplate.replace(_section + _test, '')
+                continue
+                
+            compiledIterables = self.compileIterables(source, __section)
+            errorIterables = compiledIterables.pop('error')
+            
+            for toReplace, compiled in compiledIterables.items():
+                __section = __section.replace(toReplace, compiled)
+            
+            for toReplace, errorKeys in errorIterables:
                     verbose.append("-skipping configlet section {0} in {1}: iterations failed on {2}".format(
                         re.sub(r"[\n\t\r]*", "", toReplace[:15]),
                         self.name,
                         ','.join(errorKeys)
                     ))
+                    __section = re.sub(cleanRemoveWrap(toReplace), '', __section)
+                    
+            #deal with variables
+            #if len(__section):
+            compiledTemplate = self.compileTemplate(source, __section)
+            templateErrors = compiledTemplate.pop('error')
+            
+            if templateErrors:
+                verbose.append("-error building section {0}: global/device definition for {1} undefined".format(self.name, ','.join(templateErrors)))
                 __section = ''
+            else:
+                for toReplace, compiled in compiledTemplate.items():   
+                    __section = __section.replace(toReplace, compiled)
+                    
             baseTemplate = baseTemplate.replace(_section + _test, __section)
-
+                
         #parse stuff in [] for iterations outside of sections
         #support only one iterable for now from the global space
         compiledIterables = self.compileIterables(source, baseTemplate)
-
         errorIterables = compiledIterables.pop('error')
             
         for toReplace, compiled in compiledIterables.items():   
@@ -688,27 +625,16 @@ class Configlet():
             #baseTemplate = baseTemplate.replace(toReplace+'\r\n', '')
             baseTemplate = re.sub(cleanRemoveWrap(toReplace), '', baseTemplate)
             
-        #now deal with the base template after sections/iterables are worked out
-        valueDict = buildValueDict(source, baseTemplate)
-        errorKeys = valueDict.pop('error')
-        if errorKeys:
-            verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, ','.join(errorKeys)))
-            return ('', verbose)
+        compiledTemplate = self.compileTemplate(source, baseTemplate)
+        templateErrors = compiledTemplate.pop('error')
         
-        #this is to sanitize and replace invalid keys in the format function    
-        _keys = []
-        for i, key in enumerate(valueDict.keys(), 0):
-            i = 'i'+str(i)
-            baseTemplate = baseTemplate.replace('{'+key+'}', '{'+i+'}')
-            _keys.append(i)
-        try:
-            baseTemplate = baseTemplate.format(**dict(zip(_keys, valueDict.values())))
-        except KeyError as e:
-            verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, e))
-            #must return a value which passes a boolean test
-            #we will usually get here if the parent configlet requires device @property functions but the 
+        if templateErrors:
+            verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, ','.join(templateErrors)))
             return ('', verbose)
-
+        else:
+            for toReplace, compiled in compiledTemplate.items():   
+                baseTemplate = baseTemplate.replace(toReplace, compiled)
+                
         return (baseTemplate.strip(), verbose)
   
 class Manager():
@@ -968,7 +894,7 @@ class Manager():
                         row = [row for row in self.last_deployed_var['device_vars']['Tab0']['data'] if row[0] == serialNumber][0]
                         self.last_deployed_var['device_vars']['Tab0']['data'].remove(row)
                     
-                except (CVP.CvpApiError) as e:
+                except (CvpApiError) as e:
                     
                     LOGGER.log_noTs("--exception deleting configlets (979), please try again; aborting")
                     LOGGER.log_noTs(e)
@@ -1198,14 +1124,14 @@ def searchConfig(key, default = None):
 def getKeyDefinition(key, source):
     csv_telemetry_source = key.split('#')
     
-    file = None
+    path = None
     truncate = None
     op = None
     qty = None
     
     if len(csv_telemetry_source) == 2:
          
-        file = csv_telemetry_source[0]
+        path = csv_telemetry_source[0]
         key  = csv_telemetry_source[1]
     
     math = parseForMath(key)
@@ -1230,12 +1156,12 @@ def getKeyDefinition(key, source):
         else:
             return str(values)[start:end]
 
-    def fetchTelemOrFileData(file, key):
-        if file.startswith('/') and hasattr(CVP, 'cvprac'):
+    def fetchTelemOrFileData(path, key):
+        if path.startswith('/') and hasattr(CVP, 'cvprac'):
             #this is super hacked need a telemetry Data Model parser. cvp-connector has one but in js
             
             try:
-                found = CVP.cvprac.get('/api/v1/rest/' + searchSource('serialNumber', source, '').upper() + file)
+                found = CVP.cvprac.get('/api/v1/rest/' + searchSource('serialNumber', source, '').upper() + path)
                 found = found['notifications'][0]['updates'][key]['value']
 
                 if type(found) == dict:
@@ -1253,8 +1179,8 @@ def getKeyDefinition(key, source):
                 return None
         return None
     
-    if file:
-        toReturn = fetchTelemOrFileData(file, key)
+    if path:
+        toReturn = fetchTelemOrFileData(path, key)
     elif key.isdigit():
         toReturn = key
     else:
@@ -1277,7 +1203,7 @@ def parseForRequiredKeys(template):
     return re.findall('{(.*?)}', template)
 
 def parseForIterables(template):
-    return re.findall('([\t ]*)(\[[\s\S]*?\](?!else))', template)
+    return re.findall('([\t ]*)(\[[\s\S]*?\](?![\s]*else))', template)
     #return re.findall('(^\s*)\[[\s\S]*?\](?!else)', template)
 
 def parseForSections(template):
@@ -1294,7 +1220,6 @@ def parseForMath(key):
 def buildConditionTest(keys):
     condition_list = []
     _keys = keys.split('&')
-    
     for key in _keys:
         key = re.split('([^a-z0-9A-Z_]+)', key)
         if len(key) > 1:
@@ -1386,7 +1311,7 @@ def main():
                     global CVP
                     try:
                         CVP = Cvp()
-                    except (ImportError, self.CvpClientError) as e:
+                    except (ImportError, CvpClientError) as e:
                         LOGGER.log("Failed to init CVP")
                         LOGGER.log_noTs(e)
                         continue
