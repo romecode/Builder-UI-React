@@ -7,6 +7,7 @@ import xlrd
 import socket
 import json
 from manager.extensions import SwitchBase
+from collections import OrderedDict
 
 LOGGER = None
 CVP = None
@@ -71,6 +72,10 @@ class Cvp():
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) # to supress the warnings for https
         self.cvprac.connect(searchConfig('server'), searchConfig('user'), searchConfig('password'))
         LOGGER.log("Successfully authenticated to CVP")
+        
+    def loadContainers(self):
+        LOGGER.log_noTs("-loading CVP containers: please wait...")
+        self.configlets = {item['name'].lower():item for item in self.cvprac.api.get_containers()['data']}
 
     def loadConfiglets(self):
         LOGGER.log_noTs("-loading CVP configlets: please wait...")
@@ -79,12 +84,12 @@ class Cvp():
     def loadInventory(self):
         LOGGER.log_noTs("-loading CVP inventory: please wait...")
         for device in self.cvprac.api.get_inventory():
-            if device['parentContainerId'] != "undefined_container":
-                serialNumber = device['serialNumber']
-                host = device['hostname'].lower()
-                device['configlets'] = {}
-                self.devices[serialNumber] = device
-                self.host_to_device[host] = self.devices[serialNumber]
+            #if device['parentContainerId'] != "undefined_container":
+            serialNumber = device['serialNumber']
+            host = device['hostname'].lower()
+            device['configlets'] = {}
+            self.devices[serialNumber] = device
+            self.host_to_device[host] = self.devices[serialNumber]
         
     def loadDeviceConfiglets(self, serialNumber):
         if serialNumber in list(self.devices.keys()):
@@ -225,6 +230,8 @@ class Task():
                     continue
                 LOGGER.log_noTs("Configlet does not match and is not assigned expected/actual: {0}".format(name))
                 LOGGER.log_noTs('-'*50)
+                LOGGER.log_noTs('\n'.join(compile_info)) if compile_info else None
+                LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(new_configlet_content)
                 LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(exists['config'])
@@ -232,6 +239,8 @@ class Task():
                 error += 1
             elif assigned and not match:
                 LOGGER.log_noTs("Configlet does not match expected/actual: {0}".format(name))
+                LOGGER.log_noTs('-'*50)
+                LOGGER.log_noTs('\n'.join(compile_info)) if compile_info else None
                 LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(new_configlet_content)
                 LOGGER.log_noTs('-'*50)
@@ -463,7 +472,7 @@ class Configlet():
                                 flag = not flag if not flag else flag
                                 test = [t.isdigit() for t in item[0]]
                             else:
-                                test.append(item.isdigit())
+                                test.append(item[0].isdigit())
                             if not all(test):
                                 compiled['error'].append((template, [keys[y]]))
                                 error = True
@@ -526,7 +535,7 @@ class Configlet():
         _keys = []
         for i, key in enumerate(valueDict.keys(), 0):
             i = 'i'+str(i)
-            _baseTemplate = baseTemplate.replace('{'+key+'}', '{'+i+'}')
+            _baseTemplate = _baseTemplate.replace('{'+key+'}', '{'+i+'}')
             _keys.append(i)
             
         try:
@@ -534,7 +543,7 @@ class Configlet():
             return compiled
         except KeyError as e:
             #verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, e))
-            compiled['error'] = [e]
+            compiled['error'] = [str(e)]
             #must return a value which passes a boolean test
             #we will usually get here if the parent configlet requires device @property functions but the 
             #return ('', verbose)
@@ -624,7 +633,7 @@ class Configlet():
             ))
             #baseTemplate = baseTemplate.replace(toReplace+'\r\n', '')
             baseTemplate = re.sub(cleanRemoveWrap(toReplace), '', baseTemplate)
-            
+
         compiledTemplate = self.compileTemplate(source, baseTemplate)
         templateErrors = compiledTemplate.pop('error')
         
@@ -660,11 +669,24 @@ class Manager():
             self.dbRecord = Deployment.objects.get(id=id)
             self.last_deployment = searchSource('last_deployment', self.dbRecord, 0)
             self.last_deployed_var = searchSource('last_deployed_var', self.dbRecord, {})
+            self.previous_device_vars = {}
+            try:
+                d = self.last_deployed_var
+                for row in d['device_vars']['Tab0']['data']:
+                    if not any(row):
+                        continue
+                    vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'],row))
+                    vars['__link__'] = row
+                    self.previous_device_vars[vars['serialNumber']] = vars
+            except Exception as e:
+                print(e)
+                        
             
         else:
             self.dbRecord = Deployment()
             self.last_deployment = 0
             self.last_deployed_var = {}
+            self.previous_device_vars = {}
         
         self.name = self.dbRecord.name if self.last_deployment else searchSource('name', fromUI, 'no_name_error')
         self.mode = searchSource('mode', fromUI, 'no_mode_error')
@@ -676,8 +698,8 @@ class Manager():
         for tab in [tab for tab in iterables.keys()]:
             if tab.split('#')[0] not in selected_template_names:
                 iterables.pop(tab)
-                    
-            
+        
+        
         self.current_deployment_var = {
             "compile_for": searchSource('compile_for', fromUI, []),
             "selected_templates": searchSource('selected_templates', fromUI, []),
@@ -686,19 +708,25 @@ class Manager():
             "variables": searchSource('variables', fromUI, {}),
         }
         
+        self.current_device_vars = {}
+        try:
+            d = self.current_deployment_var
+            for row in d['device_vars']['Tab0']['data']:
+                if not any(row):
+                    continue
+                vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'],row))
+                vars['__link__'] = row
+                self.current_device_vars[vars['serialNumber']] = vars
+        except Exception as e:
+            print(e)
+            pass
+        
     def stageDeployment(self, d):
         LOGGER.log_noTs("-initializing internal state: please wait...")
 
         self.CONFIG = {'global':Global_Config.objects.get(name='master').params}
         #fix disjointed keys/values from UI
         variables = dict(zip(d['variables']['keys'], d['variables']['values']))
-
-        device_vars = {}
-        for row in d['device_vars']['Tab0']['data']:
-            if not any(row):
-                continue
-            vars = dict(zip(d['device_vars']['Tab0']['columns'],row))
-            device_vars[vars['serialNumber']] = vars
         
         iterables = {}
         for t, data in d['iterables'].items():
@@ -711,7 +739,7 @@ class Manager():
         compile_for = [serialNumber for serialNumber in searchSource('compile_for', d, [])]
         
         self.CONFIG = {**variables, **iterables, **self.CONFIG}    
-        self.CONFIG['device_vars'] = device_vars
+
         self.CONFIG['compile_for'] = compile_for
         self.CONFIG['selected_templates'] = searchSource('selected_templates', d, [])
         self.CONFIG['name'] = self.name
@@ -732,7 +760,7 @@ class Manager():
             
             for serialNumber in compile_for:
                 
-                device_vars = searchSource(serialNumber, searchConfig('device_vars'), {})
+                device_vars = searchSource(serialNumber, self.previous_device_vars, {})
                 device = Switch(device_vars)
                 if device.loadCVPRecord():
                     device.loadCVPConfiglets()
@@ -764,7 +792,7 @@ class Manager():
             
             for serialNumber in compile_for:
                 
-                device_vars = searchSource(serialNumber, searchConfig('device_vars'), {})
+                device_vars = searchSource(serialNumber, self.previous_device_vars, {})
                 device = Switch(device_vars)
                 if device.loadCVPRecord():
                     device.loadCVPConfiglets()
@@ -792,7 +820,7 @@ class Manager():
         
         for serialNumber in compile_for:
             
-            device_vars = searchSource(serialNumber, searchConfig('device_vars'), {})
+            device_vars = searchSource(serialNumber, self.current_device_vars, {})
             device = Switch(device_vars)
             if device.loadCVPRecord():
                 device.loadCVPConfiglets()
@@ -821,7 +849,7 @@ class Manager():
         
         for serialNumber in compile_for:
             
-            device_vars = searchSource(serialNumber, searchConfig('device_vars'), {})
+            device_vars = searchSource(serialNumber, self.previous_device_vars, {})
             device = Switch(device_vars)
             if device.loadCVPRecord():
                 device.loadCVPConfiglets()
@@ -864,7 +892,9 @@ class Manager():
             
             if device:
                 CVP.loadDeviceConfiglets(serialNumber)
-                
+            
+            moveContainer = False
+            
             generated_device_configlets = [c for c in generated_deployment_configlets if re.split('DEPLOYMENT:| HOST:| SN:| TEMPLATE:', c['name'])[3] == serialNumber]
             generated_template_device_configlets = [c for c in templates_to_remove if re.split('DEPLOYMENT:| HOST:| SN:| TEMPLATE:', c['name'])[3] == serialNumber]
             
@@ -874,12 +904,35 @@ class Manager():
             if serialNumber in removeDevices:
                 #have to unassign templates first so filter out global template removals
                 toRemove = [(c['name'],c['key']) for c in generated_device_configlets]
+                
             else:
                 toRemove = [(c['name'],c['key']) for c in generated_template_device_configlets]
+                
+                if self.name == 'Management':
+                    
+                    oldContainer = searchSource('container', searchSource(serialNumber, self.previous_device_vars), 'not_found')
+                    newContainer = searchSource('container', searchSource(serialNumber, self.current_device_vars), 'not_found')
+                    if newContainer != oldContainer:
+                        moveContainer = newContainer
                 
             toRemove = list(set(toRemove))
             toRemove = [{'name':c[0], 'key':c[1]} for c in toRemove]
             
+            if moveContainer and device:
+                try:
+                    container = searchSource(moveContainer.lower(), CVP.containers, {})
+                    if container:
+                        LOGGER.log_noTs('--moving {0} from container {1} to {2}'.format(searchSource('hostname', device, 'no_hostname_error'), oldContainer, newContainer))
+                        CVP.cvprac.api.move_device_to_container('builder', device, container)
+                        varsDict = searchSource(serialNumber, self.previous_device_vars, {})
+                        varsDict['container'] = moveContainer
+                        link = varsDict['__link__']
+                        #this updates the actual row data in self.last_deployed_var without __link__
+                        link[:] = list(varsDict)[:-1]
+                except (CvpApiError) as e:
+                    LOGGER.log_noTs("--exception moving containers, please try again; aborting")
+                    LOGGER.log_noTs(e)
+                    return False
             
             if toRemove:
                 try:
@@ -891,7 +944,8 @@ class Manager():
                         CVP.cvprac.api.delete_configlet(c['name'], c['key'])
                     if serialNumber in removeDevices:
                         self.last_deployed_var['compile_for'].remove(serialNumber)
-                        row = [row for row in self.last_deployed_var['device_vars']['Tab0']['data'] if row[0] == serialNumber][0]
+                        row = list(searchSource(serialNumber, self.previous_device_vars, {}).values())
+                        #row = [row for row in self.last_deployed_var['device_vars']['Tab0']['data'] if row[0] == serialNumber][0]
                         self.last_deployed_var['device_vars']['Tab0']['data'].remove(row)
                     
                 except (CvpApiError) as e:
@@ -927,8 +981,9 @@ class Manager():
         
         LOGGER.log("Running: Save and Deploy")
         
+        CVP.loadContainers()
         CVP.loadInventory()
-
+        
         
         if self.last_deployment:
             
@@ -982,7 +1037,7 @@ class Manager():
         
                 for serialNumber in compile_for:
                     
-                    device_vars = searchSource(serialNumber, searchConfig('device_vars'), {})
+                    device_vars = searchSource(serialNumber, self.current_device_vars, {})
                     device = Switch(device_vars)
                     if device.loadCVPRecord():
                         device.loadCVPConfiglets()
@@ -1077,7 +1132,7 @@ class Manager():
 
         for serialNumber in compile_for:
             
-            device_vars = searchSource(serialNumber, searchConfig('device_vars'), {})
+            device_vars = searchSource(serialNumber, self.current_device_vars, {})
             self.COMPILE_FOR.append(Switch(device_vars))
         
         self.stageTasks()

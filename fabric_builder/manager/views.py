@@ -12,8 +12,46 @@ from manager import builder
 import socket
 import json
 from cvprac.cvp_client import CvpClient
+from cvprac.cvp_client_errors import CvpClientError
 import os
 
+class CVP():
+    def __init__(self):
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) # to supress the warnings for https
+        self.cvprac = CvpClient()
+        config = Global_Config.objects.get(name='master').params
+        self.cvprac.connect(config['server'], config['user'], config['password'])
+        
+    def connect(self):
+        try:
+            config = Global_Config.objects.get(name='master').params
+            self.cvprac.connect(config['server'], config['user'], config['password'])
+            return True
+        except Exception as e:
+            print(e)
+            return False
+            
+    def status(self):
+        try:
+            self.cvprac.api.get_cvp_info()
+            return True
+        except Exception as e:
+            print(e)
+            if self.connect():
+                return True
+            else:
+                return False
+            
+    def call(self, endpoint):
+        if self.status():
+            try:
+                return getattr(self.cvprac.api, endpoint)()
+            except CvpClientError as e:
+                return False
+        else:
+            return False
+        
+CVPINSTANCE = CVP()
 
 def send_cmd(cmd):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -23,11 +61,17 @@ def send_cmd(cmd):
 
 
 def cvpInfo(request):
-    cvprac = CvpClient()
+    #===========================================================================
+    # cvprac = CvpClient()
+    # try:
+    #     config = Global_Config.objects.get(name='master').params
+    #     cvprac.connect(config['server'], config['user'], config['password'])
+    #     cvp_status = {'status': cvprac.api.get_cvp_info()['version'],'name':'CVP'}
+    # except:
+    #     cvp_status = {'status': 'Disconnected','name':'CVP'}
+    #===========================================================================
     try:
-        config = Global_Config.objects.get(name='master').params
-        cvprac.connect(config['server'], config['user'], config['password'])
-        cvp_status = {'status': cvprac.api.get_cvp_info()['version'],'name':'CVP'}
+        cvp_status = {'status': CVPINSTANCE.call('get_cvp_info')['version'],'name':'CVP'}
     except:
         cvp_status = {'status': 'Disconnected','name':'CVP'}
     
@@ -44,23 +88,24 @@ def builderInfo(request):
     return JsonResponse(builder_status)
 
 def devices(request):
-    cvprac = CvpClient()
     try:
-        config = Global_Config.objects.get(name='master').params
-        cvprac.connect(config['server'], config['user'], config['password'])
-        devices = cvprac.api.get_inventory()
+        devices = CVPINSTANCE.call('get_inventory')
         devices.sort(key=lambda item: item['hostname'])
-    except:
+    except Exception as e:
         devices = []
     return JsonResponse(devices, safe=False)
 
+def containers(request):
+    try:
+        containers = [c['name'] for c in CVPINSTANCE.call('get_containers')['data']]
+        containers.sort()
+    except:
+        containers = []
+    return JsonResponse(containers, safe=False)
 
 def leafs(request):
-    cvprac = CvpClient()
     try:
-        config = Global_Config.objects.get(name='master').params
-        cvprac.connect(config['server'], config['user'], config['password'])
-        devices = cvprac.api.get_inventory()
+        devices = CVPINSTANCE.call('get_inventory')
         devices.sort(key=lambda item: item['hostname'])
         device = [d for d in devices if d not in config['spines']]
     except:

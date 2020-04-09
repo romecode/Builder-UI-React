@@ -18,6 +18,8 @@ from django.urls import include, path
 from django.conf.urls import url
 from manager.models import Deployment, Template
 from rest_framework import routers, serializers, viewsets
+from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
 
 router = routers.DefaultRouter()
 admin.site.site_header = "Arista Deployment Manager Admin"
@@ -35,7 +37,15 @@ class DeploymentSerializer(serializers.HyperlinkedModelSerializer):
 class DeploymentViewSet(viewsets.ModelViewSet):
     queryset = Deployment.objects.all()
     serializer_class = DeploymentSerializer
-
+    
+    def retrieve(self, request, pk=None):
+        queryset = Deployment.objects.all()
+        if pk.isdigit():
+            d = get_object_or_404(queryset, pk=pk)
+        else:
+            d = get_object_or_404(queryset, name__iexact=pk)
+        serializer = DeploymentSerializer(d)
+        return Response(serializer.data)
 
 router.register(r'deployments', DeploymentViewSet)
 
@@ -53,6 +63,7 @@ class basicDeploymentViewSet(viewsets.ModelViewSet):
     queryset = Deployment.objects.all()
     serializer_class = basicDeploymentSerializer
 
+    
 
 router.register(r'basic_deployments', basicDeploymentViewSet)
 
