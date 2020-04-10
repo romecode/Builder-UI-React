@@ -17,10 +17,13 @@ import os
 
 class CVP():
     def __init__(self):
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) # to supress the warnings for https
-        self.cvprac = CvpClient()
-        config = Global_Config.objects.get(name='master').params
-        self.cvprac.connect(config['server'], config['user'], config['password'])
+        try:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) # to supress the warnings for https
+            self.cvprac = CvpClient()
+            config = Global_Config.objects.get(name='master').params
+            self.cvprac.connect(config['server'], config['user'], config['password'])
+        except:
+            pass
         
     def connect(self):
         try:
