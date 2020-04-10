@@ -38,7 +38,6 @@ class Log():
         fabric_builder_log_complete = open(MODULE_DIR + '/fabric_builder_log_complete.txt', 'a')
         
         string = "{0}: {1}\n".format( datetime.datetime.now().strftime('%a %b %d %H:%M'), string )
-        no_stamp = "{0}\n".format( string )
         sys.stderr.write(string)
         fabric_builder_log.write(string)
         fabric_builder_log.close()
@@ -94,7 +93,6 @@ class Cvp():
     def loadDeviceConfiglets(self, serialNumber):
         if serialNumber in list(self.devices.keys()):
             device = self.devices[serialNumber]
-            host = device['hostname']
             device_configlets = self.cvprac.api.get_configlets_by_device_id(device['systemMacAddress'])
             device['configlets'] = {item['name'].lower():item for item in device_configlets}
             return True
@@ -124,7 +122,7 @@ class Cvp():
                 if device:
                     devices.append(device)
                     continue
-            except KeyError as e:
+            except KeyError:
                 LOGGER.log_noTs("Could not find {0}".format(_search))
         return devices
     
@@ -144,13 +142,13 @@ class Cvp():
             LOGGER.log_noTs("---updating configlet {0}; please wait...".format(configlet_name))
             self.cvprac.api.update_configlet(new_configlet_content, configlet['key'], configlet_name)
         else:
-            LOGGER.log_noTs("---nothing to do".format(configlet_name))
+            LOGGER.log_noTs("---nothing to do")
         return self.cvprac.api.get_configlet_by_name(configlet_name)
                 
     def deployDevice(self, device, container, configlets_to_deploy):
         try:
             ids = self.cvprac.api.deploy_device(device.cvp, container, configlets_to_deploy)
-        except CvpApiError as e:
+        except:
             LOGGER.log_noTs("---deploying device {0}: failed, could not get task id from CVP".format(device.hostname))
         else:
             ids = ','.join(map(str, ids['data']['taskIds']))
@@ -174,7 +172,7 @@ class Cvp():
             else:
                 #apply to device
                 toDevice = getBySerial(dest)
-                hostname = searchSource('hostname', toDevice, 'no_hostname_error')
+                #hostname = searchSource('hostname', toDevice, 'no_hostname_error')
                 LOGGER.log_noTs("---applying configlets to {0}; please wait...".format(dest))
                 _result = self.cvprac.api.apply_configlets_to_device(app_name, toDevice.cvp, configlets) if toDevice.cvp else None
                 
@@ -199,7 +197,6 @@ class Task():
 
         LOGGER.log_noTs('')
         LOGGER.log_noTs("******* {0} / {1} *******".format(self.device.hostname, self.device.serialNumber))
-        configlet_keys = []
         
         for name, configlet in self.device.to_deploy:
             
@@ -351,14 +348,14 @@ class Switch(SwitchBase):
     
     def loadCVPRecord(self):
         self.cvp = searchSource(self.serialNumber, CVP.devices, {})
-        LOGGER.log_noTs("-loading CVP record: {1}".format(self.hostname, 'success' if self.cvp else 'not found'))
+        LOGGER.log_noTs("-loading CVP record: {0}".format('success' if self.cvp else 'not found'))
         if not self.cvp:
             return False
         return True
         
     def loadCVPConfiglets(self):
         success = CVP.loadDeviceConfiglets(self.serialNumber)
-        LOGGER.log_noTs("-loading CVP configlets: {1}".format(self.hostname, 'success' if success else 'not found'))
+        LOGGER.log_noTs("-loading CVP configlets: {0}".format('success' if success else 'not found'))
     
     def searchConfig(self, key):
         return searchConfig(key)
@@ -441,7 +438,7 @@ class Configlet():
 
         for whitespace, template in iterables:
             
-            extractedTemplates = [v.strip('[]') for v in re.split('(?<=\])[\s]*else[\s]*(?=\[)',template)]
+            extractedTemplates = [v.strip('[]') for v in re.split(r'(?<=\])[\s]*else[\s]*(?=\[)',template)]
             #iteration for []else[]i.e. 2 at most
 
             for i, _template in enumerate(extractedTemplates):
@@ -503,7 +500,7 @@ class Configlet():
                         else:
                             #no lists were found return once
                             compiled[template] = _template.format(**dict(zip(_keys, [function(value) for value, function in values_and_getters])))    
-                    except StopIteration as e:
+                    except StopIteration:
                         compiled[template] = '\n'.join(_compiled)
                     
                     if i == 0:
@@ -1252,23 +1249,22 @@ def getKeyDefinition(key, source):
 
 def cleanRemoveWrap(text):
     text = re.escape(text)
-    return '[ \t]*{0}[\t ]*(?:\r\n|\n)'.format(text)
+    return r'[ \t]*{0}[\t ]*(?:\r\n|\n)'.format(text)
 
 def parseForRequiredKeys(template):
-    return re.findall('{(.*?)}', template)
+    return re.findall(r'{(.*?)}', template)
 
 def parseForIterables(template):
-    return re.findall('([\t ]*)(\[[\s\S]*?\](?![\s]*else))', template)
-    #return re.findall('(^\s*)\[[\s\S]*?\](?!else)', template)
+    return re.findall(r'([\t ]*)(\[[\s\S]*?\](?![\s]*else))', template)
 
 def parseForSections(template):
-    return re.findall('(@[\s\S]*?@)({.*?})*', template)
+    return re.findall(r'(@[\s\S]*?@)({.*?})*', template)
 
 def parseForTruncation(key):
-    return re.findall('([\w]+)(\([-+]?\d*:[-+]?\d*\))?', key)
+    return re.findall(r'([\w]+)(\([-+]?\d*:[-+]?\d*\))?', key)
 
 def parseForMath(key):
-    return re.findall('(\w+)([+\-*]+)(\d+)?', key)
+    return re.findall(r'(\w+)([+\-*]+)(\d+)?', key)
 
 #builds a tuple of values followed by a comparator lambda
 #used to check if tests pass while supporting section injections from the global variable space
@@ -1276,7 +1272,7 @@ def buildConditionTest(keys):
     condition_list = []
     _keys = keys.split('&')
     for key in _keys:
-        key = re.split('([^a-z0-9A-Z_]+)', key)
+        key = re.split(r'([^a-z0-9A-Z_]+)', key)
         if len(key) > 1:
             condition = key[1]
             if condition == '=':
