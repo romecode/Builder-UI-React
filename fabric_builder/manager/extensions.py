@@ -49,7 +49,7 @@ class SwitchBase():
     @property
     def underlay(self):
         #TODO!!!!
-        template = MANAGER.TEMPLATES.get('underlay_private')
+        template = MANAGER.TEMPLATES.get('Underlay')
         i = 0
         
         if len(self.underlay_inject):

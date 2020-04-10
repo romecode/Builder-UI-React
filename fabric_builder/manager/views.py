@@ -112,6 +112,12 @@ def leafs(request):
         devices = []
     return JsonResponse(devices, safe=False)
 
+def spines(request):
+    config = Global_Config.objects.get(name='master').params
+    spines = config['spines']
+    
+    return JsonResponse(spines, safe=False)
+
 def index(request):
     
     return render(request, 'frontend/index.html')
