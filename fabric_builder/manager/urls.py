@@ -7,7 +7,7 @@ urlpatterns = [
     path('cvpInfo', views.cvpInfo),
     path('builderInfo', views.builderInfo),
     path('devices', views.devices),
-    path('spines', views.devices),
+    path('spines', views.spines),
     path('containers', views.containers),
     path('processXls', views.processXls),
     path('debug', views.debug),

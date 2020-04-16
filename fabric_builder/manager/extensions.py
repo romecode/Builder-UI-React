@@ -1,5 +1,7 @@
+from ipaddress import ip_address
+
 class SwitchBase():
-    
+
     @property
     def peer_desc(self, peer):
         return "TO-{0}".format(peer.hostname)
@@ -48,38 +50,29 @@ class SwitchBase():
     
     @property
     def underlay(self):
-        #TODO!!!!
-        template = MANAGER.TEMPLATES.get('Underlay')
-        i = 0
-        
-        if len(self.underlay_inject):
-            return "\n".join([t[0] for t in self.underlay_inject])
-        
-        for i, spine in enumerate(MANAGER.SPINES, start = 1):
-            #compile p2p link to spine
-            
-            try:
-                ipAddress = ip_address(unicode(getattr(self, "sp{0}_ip".format(i))))
-                spine_args = {
-                    "interface" : getattr(self, "sp{0}_int".format(i)),
+        template = [t for t in self.MANAGER.TEMPLATES.values() if t.name == "Underlay"][0]
+        compiled = []
+        for data in self.underlay_inject:
+            if self.role == "spine":
+                ipAddress = ip_address(data['spine_Ip'])
+                args = {
+                    "interface" : data['spine_Int'],
                     "address" : ipAddress,
-                    "interface_speed" : getattr(self, "sp{0}_speed".format(i), self.searchConfig('fabric_speed')),
-                    "description" : "TO-{0}-UNDERLAY Ethernet{1}".format(self.hostname, getattr(self, "lf{0}_int".format(i)))
+                    "interface_speed" : data['speed'],
+                    "description" : "TO-{0}-UNDERLAY Ethernet{1}".format(data['hostname'], data['leaf_Int'])
                 }
-                spine.underlay_inject.append(template.compile(spine_args))
-                self_args = {
-                    "interface" : getattr(self, "lf{0}_int".format(i)),
+            elif self.role == 'leaf':
+                ipAddress = ip_address(data['spine_Ip'])
+                args = {
+                    "interface" : data['leaf_Int'],
                     "address" : ipAddress + 1,
-                    "interface_speed" : getattr(self, "sp{0}_speed".format(i), self.searchConfig('fabric_speed')),
-                    "description" : "TO-{0}-UNDERLAY Ethernet{1}".format(spine.hostname, getattr(self, "sp{0}_int".format(i)))
+                    "interface_speed" : data['speed'],
+                    "description" : "TO-{0}-UNDERLAY Ethernet{1}".format(data['spine'].hostname, data['spine_Int'])
                 }
-                self.underlay_inject.append(template.compile(self_args))
-                
-            except Exception as e:
-                LOGGER.log("-error building configlet section underlay for {0}<->{1}: {2}".format(spine.hostname, self.hostname, e))
-                sys.exit(0)
-            
-        return "\n".join(self.underlay_inject)
+            _cc = template.compile(args)
+            compiled.append(_cc[0])
+        
+        return "\n".join(compiled)
 
     @property
     def spine_asn(self):

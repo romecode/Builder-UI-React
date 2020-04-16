@@ -1,6 +1,5 @@
 import urllib3
 import re
-from ipaddress import ip_address
 import sys
 import datetime
 import xlrd
@@ -8,10 +7,12 @@ import socket
 import json
 from manager.extensions import SwitchBase
 from collections import OrderedDict
+from types import SimpleNamespace
 
 LOGGER = None
 CVP = None
 DEBUG = False
+MANAGER = {}
 
 from cvprac.cvp_client import CvpClient
 from cvprac.cvp_client_errors import CvpClientError
@@ -28,7 +29,7 @@ from manager.models import Deployment, Template, Global_Config
 from django.db import Error as dbError
         
            
-class Log():
+class Log:
     def __init__(self):
         fabric_builder_log = open(MODULE_DIR + '/fabric_builder_log.txt', 'w')
         fabric_builder_log.close()
@@ -57,8 +58,9 @@ class Log():
         
         fabric_builder_log_complete.write(string)
         fabric_builder_log_complete.close()
-  
-class Cvp():
+
+
+class Cvp:
     def __init__(self):
 
         self.cvprac = None
@@ -164,7 +166,7 @@ class Cvp():
         toContainer = None
         toDevice = None
         
-        #dest is a container, sn. or hostname string
+        # dest is a container, sn. or hostname string
         for dest in to:
             toContainer = self.getContainerByName(dest)
             if toContainer:
@@ -185,11 +187,10 @@ class Cvp():
                 
                 LOGGER.log_noTs("---CREATED TASKS {0}".format(','.join(map(str, _result['data']['taskIds']))))
                 
-                
-        return None    
+        return None
     
         
-class Task():
+class Task:
     def __init__(self, device = None, mode = None):
         self.device = device
         self.mode = mode
@@ -199,7 +200,6 @@ class Task():
 
         LOGGER.log_noTs('')
         LOGGER.log_noTs("******* {0} / {1} *******".format(self.device.hostname, self.device.serialNumber))
-        configlet_keys = []
         
         for name, configlet in self.device.to_deploy:
             
@@ -229,20 +229,25 @@ class Task():
                 if ignoreNotAssigned_Mismatched:
                     continue
                 LOGGER.log_noTs("Configlet does not match and is not assigned expected/actual: {0}".format(name))
-                LOGGER.log_noTs('-'*50)
-                LOGGER.log_noTs('\n'.join(compile_info)) if compile_info else None
+                LOGGER.log_noTs("compilation log:")
+                LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
+                LOGGER.log_noTs("expected:")
                 LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(new_configlet_content)
+                LOGGER.log_noTs('-'*50)
+                LOGGER.log_noTs("actual:")
                 LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(exists['config'])
                 LOGGER.log_noTs('-'*50)
                 error += 1
             elif assigned and not match:
-                LOGGER.log_noTs("Configlet does not match expected/actual: {0}".format(name))
-                LOGGER.log_noTs('-'*50)
-                LOGGER.log_noTs('\n'.join(compile_info)) if compile_info else None
+                LOGGER.log_noTs("compilation log:")
+                LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
+                LOGGER.log_noTs("expected:")
                 LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(new_configlet_content)
+                LOGGER.log_noTs('-'*50)
+                LOGGER.log_noTs("actual:")
                 LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(exists['config'])
                 LOGGER.log_noTs('-'*50)
@@ -252,15 +257,14 @@ class Task():
         
         LOGGER.log_noTs('')
         
-            
         self.device.to_deploy = []
         
         return not bool(error)
     
-    #the task finally figures out what to assign and compile
+    # the task finally figures out what to assign and compile
     def execute(self):
         configlet_keys = []
-        #apply_configlets = searchConfig('apply_configlets')
+        # apply_configlets = searchConfig('apply_configlets')
         
         def pushToCvp():
             container = searchSource('container', self.device)
@@ -272,7 +276,7 @@ class Task():
             else:
                 CVP.applyConfiglets(self.device.serialNumber, configlet_keys) 
                 
-        #DAY1 and DAY2 EXECUTION HAPPENS HERE
+        # DAY1 and DAY2 EXECUTION HAPPENS HERE
         LOGGER.log_noTs('')
         LOGGER.log_noTs("******* {0} / {1} *******".format(self.device.hostname.upper(), self.device.serialNumber.upper()))
         
@@ -280,13 +284,13 @@ class Task():
             new_configlet_content, compile_info = configlet.compile(self.device)
             LOGGER.log_noTs('CONFIGLET NAME: '+ name)
 
-            LOGGER.log_noTs('-'*50)
-            LOGGER.log_noTs('\n'.join(compile_info)) if compile_info else None
+            LOGGER.log_noTs("compilation log:")
+            LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
+            LOGGER.log_noTs("compiled:")
             LOGGER.log_noTs('-'*50)
             LOGGER.log_noTs(new_configlet_content)
-            LOGGER.log_noTs('')
+            LOGGER.log_noTs('-'*50)
             
-
             if not DEBUG:
                 name_lower = name.lower()
                 
@@ -317,29 +321,27 @@ class Task():
         LOGGER.log_noTs('')
           
         self.device.to_deploy = []
-            
-                
+
 
 class Switch(SwitchBase):
-    
+
     def __init__(self, params={}, cvpDevice={}):
         super(Switch, self).__init__()
-        #list to hold leaf compiled spine underlay interface init
+        # list to hold leaf compiled spine underlay interface init
         self.underlay_inject = []
         self.to_deploy = []
         self.cvp = {}
+
+        self.MANAGER = MANAGER
+
         for k, v in params.items():
             setattr(self, k, v)
-        
         
         self.hostname = searchSource('hostname', self) or searchSource('hostname', cvpDevice)
         self.serialNumber = searchSource('serialNumber', self) or searchSource('serialNumber', cvpDevice)
         
-        LOGGER.log_noTs("-loading {0}".format(self.hostname))
+        LOGGER.log_noTs("-loading {0}".format(self.hostname or self.serialNumber))
         
-        self.hostname_lower = self.hostname.lower()
-        
-
         MANAGER.DEVICES[self.serialNumber] = self
         MANAGER.HOST_TO_DEVICE[self.hostname] = self
         
@@ -364,7 +366,7 @@ class Switch(SwitchBase):
         return searchConfig(key)
             
     def assign_configlet(self, template):
-        #TODO: MAKE HANDLE LIST LOOKUPS, RIGHT NOW ONLY WORKS FOR ONE CONTAINER OR ONE DEVICE i.e. USELESS
+        # TODO: MAKE HANDLE LIST LOOKUPS, RIGHT NOW ONLY WORKS FOR ONE CONTAINER OR ONE DEVICE i.e. USELESS
         exception = getattr(template, "skip_container", None)
         if exception == self.role:
             return None
@@ -375,7 +377,7 @@ class Switch(SwitchBase):
         self.to_deploy.append((configlet_name, template))
      
     def compile_configlet(self, template):
-        #TODO: MAKE HANDLE LIST LOOKUPS, RIGHT NOW ONLY WORKS FOR ONE CONTAINER OR ONE DEVICE i.e. USELESS
+        # TODO: MAKE HANDLE LIST LOOKUPS, RIGHT NOW ONLY WORKS FOR ONE CONTAINER OR ONE DEVICE i.e. USELESS
         exception = getattr(template, "skip_container", None)
         if exception == self.role:
             return ('',[])
@@ -386,7 +388,7 @@ class Switch(SwitchBase):
     
     
     
-class Math():
+class Math:
     def __init__(self, start, op, qty):
         self.iter = None
         self.counter = None
@@ -425,7 +427,7 @@ class Math():
             self.counter *= self.qty
             return current
         
-class Configlet():
+class Configlet:
     def __init__(self, name, template, params = {}):        
         self.name = name
         self.template = template
@@ -441,7 +443,7 @@ class Configlet():
 
         for whitespace, template in iterables:
             
-            extractedTemplates = [v.strip('[]') for v in re.split('(?<=\])[\s]*else[\s]*(?=\[)',template)]
+            extractedTemplates = [v.strip('[]') for v in re.split(r'(?<=\])[\s]*else[\s]*(?=\[)',template)]
             #iteration for []else[]i.e. 2 at most
 
             for i, _template in enumerate(extractedTemplates):
@@ -645,8 +647,9 @@ class Configlet():
                 baseTemplate = baseTemplate.replace(toReplace, compiled)
                 
         return (baseTemplate.strip(), verbose)
-  
-class Manager():
+
+
+class Manager:
     
     def __init__(self, fromUI):
         self.tasks_to_deploy = []   
@@ -659,47 +662,65 @@ class Manager():
         self.SPINES = []
         self.TEMPLATES = {}
 
-        self.CONFIG = {'global':Global_Config.objects.get(name='master').params}
+        self.CONFIG = {'global': Global_Config.objects.get(name='master').params}
         
         templates = Template.objects.all()
         for _template in templates:
             self.TEMPLATES[_template.id] = Configlet(_template.name, _template.template)
-        
-        if(id):
+
+        self.mode = searchSource('mode', fromUI, 'no_mode_error')
+
+        if id:
             self.dbRecord = Deployment.objects.get(id=id)
             self.last_deployment = searchSource('last_deployment', self.dbRecord, 0)
             self.last_deployed_var = searchSource('last_deployed_var', self.dbRecord, {})
+            self.name = self.dbRecord.name
+
             self.previous_device_vars = {}
-            try:
-                d = self.last_deployed_var
-                for row in d['device_vars']['Tab0']['data']:
-                    if not any(row):
-                        continue
-                    vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'],row))
-                    vars['__link__'] = row
-                    self.previous_device_vars[vars['serialNumber']] = vars
-            except Exception as e:
-                print(e)
-                        
-            
+            d = self.last_deployed_var
+
+            if self.mode == "nested":
+                try:
+                    for spineSerialNumber in d['device_vars'].keys():
+                        self.previous_device_vars[spineSerialNumber] = {}
+                        for row in d['device_vars'][spineSerialNumber]['data']:
+                            if not any(row):
+                                continue
+                            _vars = OrderedDict(zip(d['device_vars'][spineSerialNumber]['columns'], row))
+                            _vars['__link__'] = row
+                            self.previous_device_vars[spineSerialNumber][_vars['serialNumber']] = _vars
+                except Exception as e:
+                    print(e)
+            else:
+                try:
+                    for row in d['device_vars']['Tab0']['data']:
+                        if not any(row):
+                            continue
+                        _vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'], row))
+                        _vars['__link__'] = row
+                        self.previous_device_vars[_vars['serialNumber']] = _vars
+                except Exception as e:
+                    print(e)
         else:
             self.dbRecord = Deployment()
             self.last_deployment = 0
             self.last_deployed_var = {}
             self.previous_device_vars = {}
+            self.name = searchSource('name', fromUI, 'no_name_error')
+
         
-        self.name = self.dbRecord.name if self.last_deployment else searchSource('name', fromUI, 'no_name_error')
-        self.mode = searchSource('mode', fromUI, 'no_mode_error')
         
-        #since we allow for the frontend to remember data filled out in interables for mutatable template list
-        #we get rid of the unnecessary data here
+        # since we allow for the frontend to remember data filled out in iterables for mutable template list
+        # we get rid of the unnecessary data here
         iterables = searchSource('iterables', fromUI, {})
-        selected_template_names = [searchSource('name', self.TEMPLATES[id]) for id in searchSource('selected_templates', fromUI, [])]
+
+        selected_template_names = [searchSource('name', self.TEMPLATES[_id]) for _id in
+                                   searchSource('selected_templates', fromUI, [])]
+
         for tab in [tab for tab in iterables.keys()]:
             if tab.split('#')[0] not in selected_template_names:
                 iterables.pop(tab)
-        
-        
+
         self.current_deployment_var = {
             "compile_for": searchSource('compile_for', fromUI, []),
             "selected_templates": searchSource('selected_templates', fromUI, []),
@@ -709,63 +730,140 @@ class Manager():
         }
         
         self.current_device_vars = {}
-        try:
-            d = self.current_deployment_var
-            for row in d['device_vars']['Tab0']['data']:
-                if not any(row):
-                    continue
-                vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'],row))
-                vars['__link__'] = row
-                self.current_device_vars[vars['serialNumber']] = vars
-        except Exception as e:
-            print(e)
-            pass
+        d = self.current_deployment_var
+
+        if self.mode == "nested":
+
+            try:
+                for spineSerialNumber in d['device_vars'].keys():
+                    self.current_device_vars[spineSerialNumber] = {}
+                    for row in d['device_vars'][spineSerialNumber]['data']:
+                        if not any(row):
+                            continue
+                        _vars = OrderedDict(zip(d['device_vars'][spineSerialNumber]['columns'], row))
+                        _vars['__link__'] = row
+                        self.current_device_vars[spineSerialNumber][_vars['serialNumber']] = _vars
+            except Exception as e:
+                print(e)
+        else:
+            try:
+                for row in d['device_vars']['Tab0']['data']:
+                    if not any(row):
+                        continue
+                    _vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'], row))
+                    _vars['__link__'] = row
+                    self.current_device_vars[_vars['serialNumber']] = _vars
+            except Exception as e:
+                print(e)
         
-    def stageDeployment(self, d):
+    def stageDeployment(self, d, loadInventory=True,  loadConfiglets=True, loadContainers=False, skipCvp=False):
         LOGGER.log_noTs("-initializing internal state: please wait...")
 
-        self.CONFIG = {'global':Global_Config.objects.get(name='master').params}
-        #fix disjointed keys/values from UI
-        variables = dict(zip(d['variables']['keys'], d['variables']['values']))
+        self.COMPILE_FOR = []
+        self.DEVICES = {}
+        self.SPINES = []
+        self.HOST_TO_DEVICE = {}
+
+        CVP.loadInventory() if loadInventory else None
+        CVP.loadConfiglets() if loadConfiglets else None
+        CVP.loadContainers() if loadContainers else None
+
+        if d == 'current':
+            d = self.current_deployment_var
+            device_vars = self.current_device_vars
+        elif d == 'last':
+            d = self.last_deployed_var
+            device_vars = self.previous_device_vars
+
+        self.CONFIG = {'global': Global_Config.objects.get(name='master').params}
+
+        # fix disjointed keys/values from UI
+        variables = {}
+        if 'variables' in d:
+            variables = dict(zip(d['variables']['keys'], d['variables']['values']))
         
         iterables = {}
-        for t, data in d['iterables'].items():
-            for i, column in enumerate(data['columns']):
-                _data = [v[i] for v in data['data']]
-                if not any(_data):
-                    continue
-                iterables[column] = _data
+        if 'iterables' in d:
+            for data in d['iterables'].values():
+                for i, column in enumerate(data['columns']):
+                    _data = [v[i] for v in data['data']]
+                    if not any(_data):
+                        continue
+                    iterables[column] = _data
 
-        compile_for = [serialNumber for serialNumber in searchSource('compile_for', d, [])]
+        if self.mode == 'nested':
+            for spine_serial_number, leafs in device_vars.items():
+
+                spine_device = CVP.getBySerial(spine_serial_number)
+
+                if not spine_device:
+                    # spine not in cvp but staged
+                    spine_device = Switch({'serialNumber': spine_serial_number, 'hostname': spine_serial_number})
+                else:
+                    spine_device = Switch(cvpDevice=spine_device)
+
+                self.COMPILE_FOR.append(spine_device)
+
+                for leaf_serial_number, data in leafs.items():
+                    # here self.current_device_vars[spine_serial_number][leaf_serial_number] = {**row, __link__: pointer to actual row}
+                    spine_device.underlay_inject.append(data)
+                    leaf_instance = getBySerial(leaf_serial_number)
+
+                    if not leaf_instance:
+                        leaf_instance = Switch({'serialNumber': data['serialNumber'], 'hostname': data['hostname']})
+                        self.COMPILE_FOR.append(leaf_instance)
+
+                    leaf_instance.underlay_inject.append({**data, 'spine': spine_device})
+
+        else:
+            for serialNumber in searchSource('compile_for', d, []):
+                device = Switch(searchSource(serialNumber, device_vars, {}))
+
+                if not skipCvp and device.loadCVPRecord():
+                    device.loadCVPConfiglets()
+                self.COMPILE_FOR.append(device)
         
-        self.CONFIG = {**variables, **iterables, **self.CONFIG}    
-
-        self.CONFIG['compile_for'] = compile_for
+        self.CONFIG = {**variables, **iterables, **self.CONFIG}
         self.CONFIG['selected_templates'] = searchSource('selected_templates', d, [])
         self.CONFIG['name'] = self.name
-        self.CONFIG['mode'] = self.mode
-        
-        print(json.dumps(self.CONFIG, indent=4))
+                
+    def stageTasks(self):
+        LOGGER.log_noTs("-staging builder tasks")
+
+        # inject a template for underlay
+        # this ends up calling the class property 'underlay' which loads the actual "Underlay" template
+
+        if self.mode == "nested":
+            # here we expect special processing in extensions.py
+            # for the particular hardcoded deployment name we mimic a template which simply 
+            # contains one variable which calls the particular @property e.g. for Underlay the template is
+            # simply {underlay}
+            selected_templates = [Configlet(self.name, template = '{{{0}}}'.format(self.name.lower()))]
+        else:
+            selected_templates = searchConfig('selected_templates')
+
+        spines = searchConfig('spines')
+
+        if not (spines):
+            LOGGER.log('-spines must be defined in the global master config; aborting')
+            return False
+
+        for device in self.COMPILE_FOR:        
+            for id_or_template in selected_templates:
+                if str(id_or_template).isdigit():
+                    device.assign_configlet(MANAGER.TEMPLATES[id_or_template])
+                else:
+                    device.assign_configlet(id_or_template)
+                self.tasks_to_deploy.append(Task(device))
+
+        return True
         
     def sync(self):
         LOGGER.log("Running: Sync")
         
         if self.last_deployment:
-            
-            CVP.loadInventory()
-            CVP.loadConfiglets()
-            self.stageDeployment(self.last_deployed_var)
-            
-            compile_for = searchConfig('compile_for', [])
-            
-            for serialNumber in compile_for:
-                
-                device_vars = searchSource(serialNumber, self.previous_device_vars, {})
-                device = Switch(device_vars)
-                if device.loadCVPRecord():
-                    device.loadCVPConfiglets()
-                self.COMPILE_FOR.append(device)
-                
+
+            self.stageDeployment('last')
             self.stageTasks()
             
             for task in self.tasks_to_deploy:
@@ -781,24 +879,7 @@ class Manager():
         
         if self.last_deployment:
 
-            
-            CVP.loadInventory()
-            CVP.loadConfiglets()
-            self.stageDeployment(self.last_deployed_var)
-            
-            compile_for = searchConfig('compile_for', [])
-            
-            
-            
-            for serialNumber in compile_for:
-                
-                device_vars = searchSource(serialNumber, self.previous_device_vars, {})
-                device = Switch(device_vars)
-                if device.loadCVPRecord():
-                    device.loadCVPConfiglets()
-                    
-                self.COMPILE_FOR.append(device)
-            
+            self.stageDeployment('last')
             self.stageTasks()
             
             for task in self.tasks_to_deploy:
@@ -812,20 +893,7 @@ class Manager():
         
         error = 0
         
-        self.stageDeployment(self.current_deployment_var)
-        
-        compile_for = searchConfig('compile_for', [])
-        
-        
-        
-        for serialNumber in compile_for:
-            
-            device_vars = searchSource(serialNumber, self.current_device_vars, {})
-            device = Switch(device_vars)
-            if device.loadCVPRecord():
-                device.loadCVPConfiglets()
-            self.COMPILE_FOR.append(device)
-
+        self.stageDeployment('current', loadContainers=True)
         self.stageTasks()
 
         for task in self.tasks_to_deploy:
@@ -842,50 +910,58 @@ class Manager():
         
         error = 0
         
-        self.stageDeployment(self.last_deployed_var)
-        
-        compile_for = searchConfig('compile_for', [])
-        
-        
-        for serialNumber in compile_for:
-            
-            device_vars = searchSource(serialNumber, self.previous_device_vars, {})
-            device = Switch(device_vars)
-            if device.loadCVPRecord():
-                device.loadCVPConfiglets()
-            self.COMPILE_FOR.append(device)
-        
+        self.stageDeployment('last', loadContainers=True)
         self.stageTasks()
         
         for task in self.tasks_to_deploy:
             if not task.verify(ignoreDeleted = True, ignoreNotAssigned = True, ignoreNotAssigned_Mismatched = False):
                 error += 1
         self.tasks_to_deploy = []
+
         LOGGER.log_noTs("-done verifying last deployment")
         LOGGER.log_noTs('')
         return not bool(error)
     
     def _sync(self):
         LOGGER.log_noTs("-running pre deployment checks and cleanup")
-        old_compile_for = searchSource('compile_for', self.last_deployed_var, [])
-        new_compile_for = self.current_deployment_var['compile_for']
+
+        if self.mode == "flat":
+            old_compile_for = searchSource('compile_for', self.last_deployed_var, [])
+            new_compile_for = self.current_deployment_var['compile_for']
+
+        elif self.mode == "nested":
+
+            old_compile_for = set()
+            new_compile_for = set()
+
+            for spine_serial_number, leafs in self.last_deployed_var.items():
+                old_compile_for.add(spine_serial_number)
+
+                for leaf_serial_number in leafs.keys():
+                    old_compile_for.add(leaf_serial_number)
+
+            for spine_serial_number, leafs in self.current_deployment_var.items():
+                new_compile_for.add(spine_serial_number)
+
+                for leaf_serial_number in leafs.keys():
+                    new_compile_for.add(leaf_serial_number)
 
         old_templates = searchSource('selected_templates', self.last_deployed_var, [])
         new_templates = self.current_deployment_var['selected_templates']
         
         removeDevices = [dev for dev in old_compile_for if dev not in new_compile_for]
-        removeTemplates = [temp for temp in old_templates if temp not in new_templates]
+        removeTemplates = [temp for temp in old_templates if temp not in new_templates]   
             
         generated_deployment_configlets = [c for c in CVP.configlets.values() if c['name'].startswith("DEPLOYMENT:"+self.fromUI['name'])]
         
         templates_to_remove = []
         
-        #remove for all devices 
+        # remove for all devices
         for id in removeTemplates:
             template_name =  searchSource('name', self.TEMPLATES[id], '')
             templates_to_remove = [c for c in generated_deployment_configlets if re.split('DEPLOYMENT:| HOST:| SN:| TEMPLATE:', c['name'])[4] == template_name]
             
-        #for all previous and current devices
+        # for all previous and current devices
         for serialNumber in list(set(old_compile_for + new_compile_for)):
             
             device = CVP.getBySerial(serialNumber)
@@ -898,11 +974,11 @@ class Manager():
             generated_device_configlets = [c for c in generated_deployment_configlets if re.split('DEPLOYMENT:| HOST:| SN:| TEMPLATE:', c['name'])[3] == serialNumber]
             generated_template_device_configlets = [c for c in templates_to_remove if re.split('DEPLOYMENT:| HOST:| SN:| TEMPLATE:', c['name'])[3] == serialNumber]
             
-            #prune templates then unassign then remove all
+            # prune templates then unassign then remove all
             templates_to_remove = [c for c in templates_to_remove if c not in generated_template_device_configlets]
             
             if serialNumber in removeDevices:
-                #have to unassign templates first so filter out global template removals
+                # have to unassign templates first so filter out global template removals
                 toRemove = [(c['name'],c['key']) for c in generated_device_configlets]
                 
             else:
@@ -981,10 +1057,6 @@ class Manager():
         
         LOGGER.log("Running: Save and Deploy")
         
-        CVP.loadContainers()
-        CVP.loadInventory()
-        
-        
         if self.last_deployment:
             
             #diff curr/last deployed i.e. currently deployed and being modified
@@ -994,24 +1066,22 @@ class Manager():
             except (dbError) as e:
                 LOGGER.log_noTs('-error saving current deployment (line952); aborting')
                 LOGGER.log_noTs('-following should manually pushed to DB as the current deployment:')
-                LOGGER.log_noTs(json.dumps(self.current_deployment_var,indent=4))
+                LOGGER.log_noTs(json.dumps(self.current_deployment_var, indent=4))
                 LOGGER.log_noTs('')
                 LOGGER.log_noTs(e)
                 return False
             
-            CVP.loadConfiglets()
-            
-            #when sync returns it should have removed all configlets and updated last_deployed_var to reflect those removals
-            #if it failed on any of the cvprac calls then the configlets might have been partially removed from CVP but not reflected in the DB for last_deployed_vars
-            #worst case scenario we can now rerun and remove non existent cvp configlets and finally update the db
+            # when sync returns it should have removed all configlets and updated last_deployed_var to reflect those removals
+            # if it failed on any of the cvprac calls then the configlets might have been partially removed from CVP but not reflected in the DB for last_deployed_vars
+            # worst case scenario we can now rerun and remove non existent cvp configlets and finally update the db
             if self._verifyLastDeployment() and self._sync():
                 
-                #===============================================================
+                # ===============================================================
                 # if self.current_deployment_var == self.last_deployed_var:
                 #     LOGGER.log_noTs('')
                 #     LOGGER.log_noTs("Nothing to do")
                 #     return True
-                #===============================================================
+                # ===============================================================
                 
                 try:
                     self.dbRecord.last_deployment = int(time.time())
@@ -1025,24 +1095,8 @@ class Manager():
                     LOGGER.log_noTs(e)
                     return False
                 
-                self.COMPILE_FOR = []
-                self.DEVICES = {}
-                self.SPINES = []
-                self.HOST_TO_DEVICE = {}
-
-                CVP.loadConfiglets()
-                
-                self.stageDeployment(self.current_deployment_var)
-                compile_for = searchConfig('compile_for', [])
-        
-                for serialNumber in compile_for:
-                    
-                    device_vars = searchSource(serialNumber, self.current_device_vars, {})
-                    device = Switch(device_vars)
-                    if device.loadCVPRecord():
-                        device.loadCVPConfiglets()
-                    self.COMPILE_FOR.append(device)
-                
+                # inventory and containers loaded in _verifyLastDeployment()
+                self.stageDeployment('current', loadInventory=False, loadContainers=False)
                 self.stageTasks()
 
                 for task in self.tasks_to_deploy:
@@ -1063,8 +1117,6 @@ class Manager():
                 LOGGER.log_noTs('-error creating deployment (line952); aborting')
                 LOGGER.log_noTs(json.dumps(self.fromUI,indent=4))
                 return False
-            
-            CVP.loadConfiglets()
             
             if self._verifyPreDeployment():
                 try:
@@ -1087,62 +1139,24 @@ class Manager():
                 
         LOGGER.log_noTs('')    
         LOGGER.log("Done: Save and Deploy")
-            
-    def stageTasks(self):
-        LOGGER.log_noTs("-staging builder tasks")
-        mode = searchConfig('mode')
-        selected_templates = searchConfig('selected_templates')
-
-        if mode == 'day1':
-            
-            for serialNumber, device in self.DEVICES.items():
-                for id in selected_templates:
-                    template = MANAGER.TEMPLATES[id]
-                    device.assign_configlet(template)
-                if device.role == "spine":
-                    self.tasks_to_deploy.append(Task(device, mode = 1))
-                else:
-                    self.tasks_to_deploy.insert(0,Task(device, mode = 1))
-            
-        elif mode == 'day2':
-            spines = searchConfig('spines')
-            
-            if not (spines):
-                LOGGER.log('-error for mode=day2, spines must be defined in the global master config; aborting')
-                return False
-
-            for device in self.COMPILE_FOR:                
-                for id in selected_templates:
-                    template = MANAGER.TEMPLATES[id]
-                    device.assign_configlet(template)
-                if device.role == "spine":
-                    self.tasks_to_deploy.append(Task(device, mode = 2))
-                else:
-                    self.tasks_to_deploy.insert(0,Task(device, mode = 2))
-            return True
         
     def debug(self):
-        LOGGER.log("Running: Debug")
         
         global DEBUG
         DEBUG = True
         
-        self.stageDeployment(self.current_deployment_var)
-        compile_for = searchConfig('compile_for', [])
+        LOGGER.log("Running: Debug")
 
-        for serialNumber in compile_for:
-            
-            device_vars = searchSource(serialNumber, self.current_device_vars, {})
-            self.COMPILE_FOR.append(Switch(device_vars))
-        
+        self.stageDeployment('current', loadConfiglets=False, skipCvp=True)
         self.stageTasks()
             
         for task in self.tasks_to_deploy:
             task.execute()
         self.tasks_to_deploy = []
-        LOGGER.log("Done: Debug") 
+        LOGGER.log("Done: Debug")
+        
 
-#get if dict, getattr if else
+# get if dict, getattr if else
 def searchSource(key, source, default = None):
     if type(source) is dict:
         return source.get(key, default)

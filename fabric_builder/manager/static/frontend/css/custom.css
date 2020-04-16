@@ -20,3 +20,8 @@
 .title, .title:hover{
 	color: black !important
 }
+a.nav-item span {
+	display: block;
+    font-size: 10px;
+    text-align: center;
+}
