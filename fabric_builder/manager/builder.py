@@ -6,8 +6,9 @@ import xlrd
 import socket
 import json
 from manager.extensions import SwitchBase
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from types import SimpleNamespace
+
 
 LOGGER = None
 CVP = None
@@ -682,13 +683,34 @@ class Manager:
             if self.mode == "nested":
                 try:
                     for spineSerialNumber in d['device_vars'].keys():
-                        self.previous_device_vars[spineSerialNumber] = {}
+                        self.current_device_vars[spineSerialNumber] = defaultdict(list)
+
                         for row in d['device_vars'][spineSerialNumber]['data']:
+
                             if not any(row):
                                 continue
-                            _vars = OrderedDict(zip(d['device_vars'][spineSerialNumber]['columns'], row))
-                            _vars['__link__'] = row
-                            self.previous_device_vars[spineSerialNumber][_vars['serialNumber']] = _vars
+
+                            # row[0] -> serialNumber
+                            self.previous_device_vars.setdefault(row[0], defaultdict(list))
+
+                            for i, column in enumerate(d['device_vars'][spineSerialNumber]['columns']):
+                                # serialNumber and hostname are used to init Switch class and should not be lists
+                                if column == 'serialNumber':
+                                    self.previous_device_vars[row[0]][column] = row[i]
+                                    column = 'leaf_serialNumber'
+                                elif column == 'hostname':
+                                    self.previous_device_vars[row[0]][column] = row[i]
+                                    column = 'leaf_hostname'
+                                else:
+                                    self.previous_device_vars[row[0]][column].append(row[i])
+
+                                self.previous_device_vars[spineSerialNumber][column].append(row[i])
+                            self.previous_device_vars[row[0]]['spine_hostname'].append(spineSerialNumber)
+                                
+                            #_vars = OrderedDict(zip(d['device_vars'][spineSerialNumber]['columns'], row))
+                            #_vars['__link__'] = row
+                            #self.previous_device_vars[spineSerialNumber][_vars['serialNumber']] = _vars
+
                 except Exception as e:
                     print(e)
             else:
@@ -697,7 +719,7 @@ class Manager:
                         if not any(row):
                             continue
                         _vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'], row))
-                        _vars['__link__'] = row
+                        #_vars['__link__'] = row
                         self.previous_device_vars[_vars['serialNumber']] = _vars
                 except Exception as e:
                     print(e)
@@ -727,6 +749,7 @@ class Manager:
             "device_vars": searchSource('device_vars', fromUI, {}),
             "iterables": iterables,
             "variables": searchSource('variables', fromUI, {}),
+            "mode": self.mode
         }
         
         self.current_device_vars = {}
@@ -735,14 +758,40 @@ class Manager:
         if self.mode == "nested":
 
             try:
-                for spineSerialNumber in d['device_vars'].keys():
+                """ for spineSerialNumber in d['device_vars'].keys():
                     self.current_device_vars[spineSerialNumber] = {}
                     for row in d['device_vars'][spineSerialNumber]['data']:
                         if not any(row):
                             continue
                         _vars = OrderedDict(zip(d['device_vars'][spineSerialNumber]['columns'], row))
                         _vars['__link__'] = row
-                        self.current_device_vars[spineSerialNumber][_vars['serialNumber']] = _vars
+                        self.current_device_vars[spineSerialNumber][_vars['serialNumber']] = _vars """
+
+                for spineSerialNumber in d['device_vars'].keys():
+                        self.current_device_vars[spineSerialNumber] = defaultdict(list)
+
+                        for row in d['device_vars'][spineSerialNumber]['data']:
+
+                            if not any(row):
+                                continue
+
+                            # row[0] -> serialNumber
+                            self.current_device_vars.setdefault(row[0], defaultdict(list))
+
+                            for i, column in enumerate(d['device_vars'][spineSerialNumber]['columns']):
+                                # serialNumber and hostname are used to init Switch class and should not be lists
+                                if column == 'serialNumber':
+                                    self.current_device_vars[row[0]][column] = row[i]
+                                    column = 'leaf_serialNumber'
+                                elif column == 'hostname':
+                                    self.current_device_vars[row[0]][column] = row[i]
+                                    column = 'leaf_hostname'
+                                else:
+                                    self.current_device_vars[row[0]][column].append(row[i])
+
+                                self.current_device_vars[spineSerialNumber][column].append(row[i])
+
+                            self.current_device_vars[row[0]]['spine_hostname'].append(spineSerialNumber)
             except Exception as e:
                 print(e)
         else:
@@ -792,28 +841,28 @@ class Manager:
                     iterables[column] = _data
 
         if self.mode == 'nested':
-            for spine_serial_number, leafs in device_vars.items():
 
-                spine_device = CVP.getBySerial(spine_serial_number)
+            for serialNumber, data in device_vars.items():
 
-                if not spine_device:
-                    # spine not in cvp but staged
-                    spine_device = Switch({'serialNumber': spine_serial_number, 'hostname': spine_serial_number})
+                cvp_record = CVP.getBySerial(serialNumber)
+
+                # original data has SerialNumbers; need to translate to hostnames here
+                if 'spine_hostname' in data:
+                    spine_hostnames = []
+                    for _serialNumber in data['spine_hostname']:
+                        _cvp_record = CVP.getBySerial(_serialNumber)
+                        spine_hostnames.append(_cvp_record['hostname'] if _cvp_record else 'NOT_IN_CVP')
+                    data['spine_hostname'] = spine_hostnames
+
+                if not cvp_record:
+                    # leaf
+                    if 'spine_hostname' in data:
+                        self.COMPILE_FOR.append(Switch(data))
+                    # spine
+                    else:
+                        self.COMPILE_FOR.append(Switch({'serialNumber': serialNumber, 'hostname': 'NOT_IN_CVP', **data}))
                 else:
-                    spine_device = Switch(cvpDevice=spine_device)
-
-                self.COMPILE_FOR.append(spine_device)
-
-                for leaf_serial_number, data in leafs.items():
-                    # here self.current_device_vars[spine_serial_number][leaf_serial_number] = {**row, __link__: pointer to actual row}
-                    spine_device.underlay_inject.append(data)
-                    leaf_instance = getBySerial(leaf_serial_number)
-
-                    if not leaf_instance:
-                        leaf_instance = Switch({'serialNumber': data['serialNumber'], 'hostname': data['hostname']})
-                        self.COMPILE_FOR.append(leaf_instance)
-
-                    leaf_instance.underlay_inject.append({**data, 'spine': spine_device})
+                    self.COMPILE_FOR.append(Switch(data, cvp_record))
 
         else:
             for serialNumber in searchSource('compile_for', d, []):
@@ -829,31 +878,18 @@ class Manager:
                 
     def stageTasks(self):
         LOGGER.log_noTs("-staging builder tasks")
-
-        # inject a template for underlay
-        # this ends up calling the class property 'underlay' which loads the actual "Underlay" template
-
-        if self.mode == "nested":
-            # here we expect special processing in extensions.py
-            # for the particular hardcoded deployment name we mimic a template which simply 
-            # contains one variable which calls the particular @property e.g. for Underlay the template is
-            # simply {underlay}
-            selected_templates = [Configlet(self.name, template = '{{{0}}}'.format(self.name.lower()))]
-        else:
-            selected_templates = searchConfig('selected_templates')
-
+            
+        selected_templates = searchConfig('selected_templates')
         spines = searchConfig('spines')
 
         if not (spines):
             LOGGER.log('-spines must be defined in the global master config; aborting')
             return False
 
-        for device in self.COMPILE_FOR:        
-            for id_or_template in selected_templates:
-                if str(id_or_template).isdigit():
-                    device.assign_configlet(MANAGER.TEMPLATES[id_or_template])
-                else:
-                    device.assign_configlet(id_or_template)
+        for device in self.COMPILE_FOR:    
+
+            for id in selected_templates:
+                device.assign_configlet(MANAGER.TEMPLATES[id])
                 self.tasks_to_deploy.append(Task(device))
 
         return True
@@ -1254,7 +1290,8 @@ def getKeyDefinition(key, source):
         toReturn = key
     else:
         toReturn = searchSource(key, source) or searchConfig(key)
-        if toReturn == 'ERROR' or not toReturn:
+
+        if toReturn == 'ERROR' or not toReturn or (type(toReturn)==list and not all(toReturn)):
             toReturn = None
             
     if math:
