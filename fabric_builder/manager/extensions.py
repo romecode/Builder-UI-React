@@ -47,32 +47,6 @@ class SwitchBase():
             return self.searchConfig('reload_delay_jericho')[1]
         else:
             return self.searchConfig('reload_delay')[1]
-    
-    @property
-    def underlay(self):
-        template = [t for t in self.MANAGER.TEMPLATES.values() if t.name == "Underlay"][0]
-        compiled = []
-        for data in self.underlay_inject:
-            if self.role == "spine":
-                ipAddress = ip_address(data['spine_Ip'])
-                args = {
-                    "interface" : data['spine_Int'],
-                    "address" : ipAddress,
-                    "interface_speed" : data['speed'],
-                    "description" : "TO-{0}-UNDERLAY Ethernet{1}".format(data['hostname'], data['leaf_Int'])
-                }
-            elif self.role == 'leaf':
-                ipAddress = ip_address(data['spine_Ip'])
-                args = {
-                    "interface" : data['leaf_Int'],
-                    "address" : ipAddress + 1,
-                    "interface_speed" : data['speed'],
-                    "description" : "TO-{0}-UNDERLAY Ethernet{1}".format(data['spine'].hostname, data['spine_Int'])
-                }
-            _cc = template.compile(args)
-            compiled.append(_cc[0])
-        
-        return "\n".join(compiled)
 
     @property
     def spine_asn(self):

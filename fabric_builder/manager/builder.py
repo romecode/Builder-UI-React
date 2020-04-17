@@ -684,7 +684,7 @@ class Manager:
             if self.mode == "nested":
                 try:
                     for spineSerialNumber in d['device_vars'].keys():
-                        self.current_device_vars[spineSerialNumber] = defaultdict(list)
+                        self.previous_device_vars[spineSerialNumber] = defaultdict(list)
 
                         for row in d['device_vars'][spineSerialNumber]['data']:
 
