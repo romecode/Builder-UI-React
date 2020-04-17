@@ -71,7 +71,7 @@ router.register(r'basic_deployments', basicDeploymentViewSet)
 class TemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Template
-        fields = ['id', 'name', 'template','required']
+        fields = ['id', 'name', 'template','schema']
 
 # ViewSets define the view behavior.
 class TemplateViewSet(viewsets.ModelViewSet):

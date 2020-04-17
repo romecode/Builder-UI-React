@@ -1,0 +1,5 @@
+fabric_builder_log.txt
+fabric_builder_log_complete.txt
+__pycache__/
+*.pyc
+.DS_Store

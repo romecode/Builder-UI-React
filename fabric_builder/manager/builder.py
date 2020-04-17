@@ -229,7 +229,7 @@ class Task:
             elif not assigned and not match:
                 if ignoreNotAssigned_Mismatched:
                     continue
-                LOGGER.log_noTs("Configlet does not match and is not assigned expected/actual: {0}".format(name))
+                LOGGER.log_noTs("Configlet does not match and is not assigned: {0}".format(name))
                 LOGGER.log_noTs("compilation log:")
                 LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
                 LOGGER.log_noTs("expected:")
@@ -242,6 +242,7 @@ class Task:
                 LOGGER.log_noTs('-'*50)
                 error += 1
             elif assigned and not match:
+                LOGGER.log_noTs("Configlet does not match: {0}".format(name))
                 LOGGER.log_noTs("compilation log:")
                 LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
                 LOGGER.log_noTs("expected:")

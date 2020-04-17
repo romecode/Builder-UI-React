@@ -14,7 +14,7 @@ def defaultTemplate():
 class Template(models.Model):
     name = models.CharField(max_length=196)
     template = models.TextField(blank=False)
-    required = JSONField(default=defaultTemplate)
+    schema = JSONField(default=defaultTemplate)
     
     def __str__(self):
         return self.name
