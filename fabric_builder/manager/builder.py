@@ -384,6 +384,7 @@ class Switch(SwitchBase):
         self.cvp = {}
 
         self.MANAGER = MANAGER
+        self.deployments = Deployment
 
         for k, v in params.items():
             setattr(self, k, v)
