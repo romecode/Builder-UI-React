@@ -20,7 +20,7 @@ class CVP():
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) # to supress the warnings for https
         self.cvprac = CvpClient()
         config = Global_Config.objects.get(name='master').params
-        self.cvprac.connect(config['server'], config['user'], config['password'])
+        #self.cvprac.connect(config['server'], config['user'], config['password'])
         
     def connect(self):
         try:

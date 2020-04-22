@@ -26,6 +26,14 @@ SECRET_KEY = 'y72f$!)xz(7!#u%f*kt^pr@9y6gf^!k70ocl#j7bdteiq2@sqs'
 DEBUG = True
 
 ALLOWED_HOSTS = []
+# **********ADDED CONFIG ******************************************/////
+CODEMIRROR_PATH = r"frontend/codemirror-5.52.2"
+
+
+
+
+
+# **********END ADDED CONFIG ******************************************/////
 
 REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,

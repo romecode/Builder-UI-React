@@ -8,6 +8,7 @@ import json
 from manager.extensions import SwitchBase
 from collections import OrderedDict, defaultdict
 from types import SimpleNamespace
+from manager.ansible_filters import FilterModule
 
 
 LOGGER = None
@@ -28,8 +29,68 @@ MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from manager.models import Deployment, Template, Global_Config
 from django.db import Error as dbError
+
+from jinja2 import BaseLoader, TemplateNotFound, Environment, meta
+
+from collections.abc import MutableMapping
+
+import difflib
         
-           
+class Telemetry(MutableMapping):
+    """A dictionary that applies an arbitrary key-altering
+       function before accessing the keys"""
+
+    def __init__(self, serialNumber, *args, **kwargs):
+        self.serialNumber = serialNumber
+        self.store = dict()
+        self.update(dict(*args, **kwargs))  # use the free update to set keys
+
+    def __getitem__(self, key):
+        return self.fetch(*key.split('#'))
+
+    def __setitem__(self, key, value):
+        self.store[self.__keytransform__(key)] = value
+
+    def __delitem__(self, key):
+        del self.store[self.__keytransform__(key)]
+
+    def __iter__(self):
+        return iter(self.store)
+
+    def __len__(self):
+        return len(self.store)
+
+    def __keytransform__(self, key):
+        return key
+
+    def __bool__(self):
+        return True
+
+    def fetch(self, path, key = None):
+        if path.startswith('/') and hasattr(CVP, 'cvprac') and key:
+            #this is super hacked need a telemetry Data Model parser. cvp-connector has one but in js
+            
+            try:
+                found = CVP.cvprac.get('/api/v1/rest/' + self.serialNumber.upper() + path)
+                found = found['notifications'][0]['updates'][key]['value']
+
+                if type(found) == dict:
+                    __keys = found.keys()
+                    if 'Value' in __keys:
+                        found = found['Value']
+                    elif 'value' in __keys:
+                        found = found['value']
+                    _type, val = next(iter(found.items()))
+                    return val
+                else:
+                    return found
+            except:
+                LOGGER.log_noTs("-failed to properly fetch/decode telemetry data for {0}".format(key))
+                return None
+        return None
+
+    
+ 
 class Log:
     def __init__(self):
         fabric_builder_log = open(MODULE_DIR + '/fabric_builder_log.txt', 'w')
@@ -40,7 +101,6 @@ class Log:
         fabric_builder_log_complete = open(MODULE_DIR + '/fabric_builder_log_complete.txt', 'a')
         
         string = "{0}: {1}\n".format( datetime.datetime.now().strftime('%a %b %d %H:%M'), string )
-        no_stamp = "{0}\n".format( string )
         sys.stderr.write(string)
         fabric_builder_log.write(string)
         fabric_builder_log.close()
@@ -78,7 +138,7 @@ class Cvp:
         
     def loadContainers(self):
         LOGGER.log_noTs("-loading CVP containers: please wait...")
-        self.configlets = {item['name'].lower():item for item in self.cvprac.api.get_containers()['data']}
+        self.containers = {item['name'].lower():item for item in self.cvprac.api.get_containers()['data']}
 
     def loadConfiglets(self):
         LOGGER.log_noTs("-loading CVP configlets: please wait...")
@@ -97,7 +157,6 @@ class Cvp:
     def loadDeviceConfiglets(self, serialNumber):
         if serialNumber in list(self.devices.keys()):
             device = self.devices[serialNumber]
-            host = device['hostname']
             device_configlets = self.cvprac.api.get_configlets_by_device_id(device['systemMacAddress'])
             device['configlets'] = {item['name'].lower():item for item in device_configlets}
             return True
@@ -127,7 +186,7 @@ class Cvp:
                 if device:
                     devices.append(device)
                     continue
-            except KeyError as e:
+            except KeyError:
                 LOGGER.log_noTs("Could not find {0}".format(_search))
         return devices
     
@@ -147,13 +206,13 @@ class Cvp:
             LOGGER.log_noTs("---updating configlet {0}; please wait...".format(configlet_name))
             self.cvprac.api.update_configlet(new_configlet_content, configlet['key'], configlet_name)
         else:
-            LOGGER.log_noTs("---nothing to do".format(configlet_name))
+            LOGGER.log_noTs("---nothing to do")
         return self.cvprac.api.get_configlet_by_name(configlet_name)
                 
     def deployDevice(self, device, container, configlets_to_deploy):
         try:
             ids = self.cvprac.api.deploy_device(device.cvp, container, configlets_to_deploy)
-        except CvpApiError as e:
+        except CvpApiError:
             LOGGER.log_noTs("---deploying device {0}: failed, could not get task id from CVP".format(device.hostname))
         else:
             ids = ','.join(map(str, ids['data']['taskIds']))
@@ -177,7 +236,6 @@ class Cvp:
             else:
                 #apply to device
                 toDevice = getBySerial(dest)
-                hostname = searchSource('hostname', toDevice, 'no_hostname_error')
                 LOGGER.log_noTs("---applying configlets to {0}; please wait...".format(dest))
                 _result = self.cvprac.api.apply_configlets_to_device(app_name, toDevice.cvp, configlets) if toDevice.cvp else None
                 
@@ -206,16 +264,16 @@ class Task:
             
             new_configlet_content, compile_info = configlet.compile(self.device)
             name_lower = name.lower()
-            
+
             exists = searchSource(name_lower, CVP.configlets, False)
-            
+
             if exists:
                 match = exists['config'] == new_configlet_content
                 assigned = searchSource(name_lower, searchSource('configlets', self.device.cvp), False)
             else:
                 match = False
                 assigned = False
-            
+
             if not exists:
                 if ignoreDeleted:
                     continue
@@ -232,27 +290,18 @@ class Task:
                 LOGGER.log_noTs("Configlet does not match and is not assigned: {0}".format(name))
                 LOGGER.log_noTs("compilation log:")
                 LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
-                LOGGER.log_noTs("expected:")
                 LOGGER.log_noTs('-'*50)
-                LOGGER.log_noTs(new_configlet_content)
-                LOGGER.log_noTs('-'*50)
-                LOGGER.log_noTs("actual:")
-                LOGGER.log_noTs('-'*50)
-                LOGGER.log_noTs(exists['config'])
+                LOGGER.log_noTs(show_diff(new_configlet_content, exists['config']))
                 LOGGER.log_noTs('-'*50)
                 error += 1
             elif assigned and not match:
                 LOGGER.log_noTs("Configlet does not match: {0}".format(name))
                 LOGGER.log_noTs("compilation log:")
                 LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
-                LOGGER.log_noTs("expected:")
                 LOGGER.log_noTs('-'*50)
-                LOGGER.log_noTs(new_configlet_content)
+                LOGGER.log_noTs(show_diff(new_configlet_content, exists['config']))
                 LOGGER.log_noTs('-'*50)
-                LOGGER.log_noTs("actual:")
-                LOGGER.log_noTs('-'*50)
-                LOGGER.log_noTs(exists['config'])
-                LOGGER.log_noTs('-'*50)
+                
                 error += 1
         if not error:
             LOGGER.log_noTs("Device is consistent with CVP")        
@@ -355,14 +404,14 @@ class Switch(SwitchBase):
     
     def loadCVPRecord(self):
         self.cvp = searchSource(self.serialNumber, CVP.devices, {})
-        LOGGER.log_noTs("-loading CVP record: {1}".format(self.hostname, 'success' if self.cvp else 'not found'))
+        LOGGER.log_noTs("-loading CVP record: {0}".format('success' if self.cvp else 'not found'))
         if not self.cvp:
             return False
         return True
         
     def loadCVPConfiglets(self):
         success = CVP.loadDeviceConfiglets(self.serialNumber)
-        LOGGER.log_noTs("-loading CVP configlets: {1}".format(self.hostname, 'success' if success else 'not found'))
+        LOGGER.log_noTs("-loading CVP configlets: {0}".format('success' if success else 'not found'))
     
     def searchConfig(self, key):
         return searchConfig(key)
@@ -386,269 +435,33 @@ class Switch(SwitchBase):
         exception = getattr(template, "skip_device", None)
         if exception == self.serialNumber:
             return ('',[])
-        return template.compile(self)    
-    
-    
-    
-class Math:
-    def __init__(self, start, op, qty):
-        self.iter = None
-        self.counter = None
-        
-        if type(start) == list:
-            self.iter = iter(start)
-        else:  
-            self.counter = int(start)
-        
-        if op == '+':
-            self.do = self.increment
-            self.qty = int(qty) if qty else 1
-        elif op == '++':
-            self.do = self.increment
-            self.qty = int(qty) if qty else 10
-        elif op == '*':
-            self.do = self.multiply
-            self.qty = int(qty) if qty else 1
-    
-    def current(self):
-        return int(next(self.iter)) if self.iter else self.counter
-    
-    def increment(self):
-        current = self.current()
-        if self.iter:
-            return current + self.qty
-        else:
-            self.counter += self.qty
-            return current
-    
-    def multiply(self):
-        current = self.current()
-        if self.iter:
-            return current * self.qty
-        else:
-            self.counter *= self.qty
-            return current
+        return template.compile(self)
+
+    @property
+    def telemetry(self):
+        return Telemetry(self.serialNumber)
+
         
 class Configlet:
+    jinjaenv = Environment(trim_blocks=True, lstrip_blocks=True)
+    jinjaenv.filters = {**jinjaenv.filters, **FilterModule().filters()}
+
     def __init__(self, name, template, params = {}):        
         self.name = name
         self.template = template
         for k, v in params.items():
-            setattr(self, k, v)  
-              
-    
-        
-    def compileIterables(self, source, baseTemplate):
-        compiled = {}
-        compiled['error'] = []
-        iterables = parseForIterables(baseTemplate)
-
-        for whitespace, template in iterables:
-            
-            extractedTemplates = [v.strip('[]') for v in re.split(r'(?<=\])[\s]*else[\s]*(?=\[)',template)]
-            #iteration for []else[]i.e. 2 at most
-
-            for i, _template in enumerate(extractedTemplates):
-                valueDict = buildValueDict(source, _template)
-                errorKeys = valueDict.pop('error')
-                if not errorKeys:
-                    #values is a dict
-                    keys = list(valueDict.keys())
-                    values_list = valueDict.values()
-
-                    #basically turn lists into iterables and static values into functions which return the same thing everytime
-                    #this way we can exhause iterators until they fail as we build new dicts to pass as args
-                    #if the flag is never set i.e. no lists are found just return one
-                    values_and_getters = []
-                    _compiled = []
-                    flag = False
-                    error = False
-                    for y, item in enumerate(values_list): 
-                        #if the item is just a list without math then use StopIteration exception to stop iterations
-                        if type(item) == list:
-                            #found at least one list
-                            flag = not flag if not flag else flag
-                            values_and_getters.append((iter(item), lambda item:next(item)))
-                        #if the item is a tuple then it wraps the item inside the tuple with math ops to be done e.g. (value, op, qty) where value can be a list, if so compile until exhausted
-                        elif type(item) == tuple:
-                            test = []
-                            if type(item[0]) == list:
-                                flag = not flag if not flag else flag
-                                test = [t.isdigit() for t in item[0]]
-                            else:
-                                test.append(item[0].isdigit())
-                            if not all(test):
-                                compiled['error'].append((template, [keys[y]]))
-                                error = True
-                            values_and_getters.append((Math(*item), lambda item:item.do()))
-                        #this is a single value, no math, compile once
-                        else:
-                            values_and_getters.append((item, lambda item:item))
-                    #sanitize format syntax from templates and replase actual keys with positionals
-                    if error:
-                        break
-                       
-                    _keys = []
-                    
-                    #don't modify existing i; this is to sanitize and replace invalid keys for the format function used later
-                    for x, key in enumerate(keys, 0):
-                        x = 'i'+str(x)
-                        _template = _template.replace('{'+key+'}', '{'+x+'}')
-                        _keys.append(x)
-                        
-
-                    #exhaust iterators
-                    z = 0
-                    try:
-                        #if flag is tripped then we know to iterate until the exception
-                        while flag:
-                            _compiled.append((whitespace if z else '')+_template.format(**dict(zip(_keys, [function(value) for value, function in values_and_getters]))))
-                            z+=1
-                        else:
-                            #no lists were found return once
-                            compiled[template] = _template.format(**dict(zip(_keys, [function(value) for value, function in values_and_getters])))    
-                    except StopIteration as e:
-                        compiled[template] = '\n'.join(_compiled)
-                    
-                    if i == 0:
-                        break
-                    if i == 1:
-                        compiled['error'].pop()
-                        
-                else:
-                    compiled['error'].append((template, errorKeys))
-        
-        return compiled
-    #source can be either dict or object class i.e. getattr(CLASS, VALUE, None) or DICT.get(value,None)
-    #will be used accordingly
-    
-    def compileTemplate(self, source, baseTemplate):
-        _baseTemplate = baseTemplate
-        compiled = {}
-        compiled['error'] = []
-        #now deal with the base template after sections/iterables are worked out
-        valueDict = buildValueDict(source, baseTemplate)
-        errorKeys = valueDict.pop('error')
-        if errorKeys:
-            compiled['error'] = errorKeys
-            #verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, ','.join(errorKeys)))
-            compiled[baseTemplate] = ''
-            return compiled
-        
-        #this is to sanitize and replace invalid keys in the format function    
-        _keys = []
-        for i, key in enumerate(valueDict.keys(), 0):
-            i = 'i'+str(i)
-            _baseTemplate = _baseTemplate.replace('{'+key+'}', '{'+i+'}')
-            _keys.append(i)
-            
-        try:
-            compiled[baseTemplate] = _baseTemplate.format(**dict(zip(_keys, valueDict.values())))
-            return compiled
-        except KeyError as e:
-            #verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, e))
-            compiled['error'] = [str(e)]
-            #must return a value which passes a boolean test
-            #we will usually get here if the parent configlet requires device @property functions but the 
-            #return ('', verbose)
-            compiled[baseTemplate] = ''
-            return compiled
-
-        
+            setattr(self, k, v)
         
     def compile(self, source):
-        #TODO: Right now all the string replacements happen literally carrying the groups as the toReplace parameters
-        #can definitely do this better
-        baseTemplate = self.template
-        #parse for sections @...@{test}
-        #and recurse on stripped sections
-        sections = parseForSections(baseTemplate)
-        verbose = []
-        for section in sections:
-            #has clause to enable/disable
-            _section, _test = section
-            __section = _section.strip('@')
-
-            
-            
-            #test the "tests" arguments i.e @...@{tests}
-            #parseCondition returns a (value, function) tuple the fn(value) will return true/false if the test passes
-            #here we collect the key which failed a test
-            
-            __test = _test.strip('{}')
-            
-            if len(__test):
-                failedTests = [v[0] for v, fn in buildConditionTest(__test) if not fn(*v, source = source)]
-            else:
-                failedTests = []
-                
-            
-            if len(__test) and failedTests:
-                #there is a test but failed -> WIPE
-                verbose.append("-skipping configlet section {0} in {1}: test condition for {2} failed".format(
-                    re.sub(r"[\n\t\r]*", "", _section[:15]),
-                    self.name,
-                    ','.join(failedTests)
-                ))
-                baseTemplate = baseTemplate.replace(_section + _test, '')
-                continue
-                
-            compiledIterables = self.compileIterables(source, __section)
-            errorIterables = compiledIterables.pop('error')
-            
-            for toReplace, compiled in compiledIterables.items():
-                __section = __section.replace(toReplace, compiled)
-            
-            for toReplace, errorKeys in errorIterables:
-                    verbose.append("-skipping configlet section {0} in {1}: iterations failed on {2}".format(
-                        re.sub(r"[\n\t\r]*", "", toReplace[:15]),
-                        self.name,
-                        ','.join(errorKeys)
-                    ))
-                    __section = re.sub(cleanRemoveWrap(toReplace), '', __section)
-                    
-            #deal with variables
-            #if len(__section):
-            compiledTemplate = self.compileTemplate(source, __section)
-            templateErrors = compiledTemplate.pop('error')
-            
-            if templateErrors:
-                verbose.append("-error building section {0}: global/device definition for {1} undefined".format(self.name, ','.join(templateErrors)))
-                __section = ''
-            else:
-                for toReplace, compiled in compiledTemplate.items():   
-                    __section = __section.replace(toReplace, compiled)
-                    
-            baseTemplate = baseTemplate.replace(_section + _test, __section)
-                
-        #parse stuff in [] for iterations outside of sections
-        #support only one iterable for now from the global space
-        compiledIterables = self.compileIterables(source, baseTemplate)
-        errorIterables = compiledIterables.pop('error')
-            
-        for toReplace, compiled in compiledIterables.items():   
-            baseTemplate = baseTemplate.replace(toReplace, compiled)  
-            
-        for toReplace, errorKeys in errorIterables:
-            verbose.append("-skipping configlet option {0} in {1}: variable {2} undefined".format(
-                        re.sub(r"[\n\t\r]*", "", toReplace[:15]) + '...',
-                        self.name,
-                        ','.join(errorKeys)
-            ))
-            #baseTemplate = baseTemplate.replace(toReplace+'\r\n', '')
-            baseTemplate = re.sub(cleanRemoveWrap(toReplace), '', baseTemplate)
-
-        compiledTemplate = self.compileTemplate(source, baseTemplate)
-        templateErrors = compiledTemplate.pop('error')
         
-        if templateErrors:
-            verbose.append("-error building configlet {0}: global/device definition for {1} undefined".format(self.name, ','.join(templateErrors)))
-            return ('', verbose)
-        else:
-            for toReplace, compiled in compiledTemplate.items():   
-                baseTemplate = baseTemplate.replace(toReplace, compiled)
-                
-        return (baseTemplate.strip(), verbose)
+        try:
+            parsedTemplate = Configlet.jinjaenv.parse(self.template)
+            valueDict = buildValueDict(source, parsedTemplate)
+            valueDict.pop('error')
+            template = Configlet.jinjaenv.from_string(self.template).render(**valueDict)
+        except Exception as e:
+            return ('', [str(e)])
+        return (template, [])
 
 
 class Manager:
@@ -684,7 +497,7 @@ class Manager:
             if self.mode == "nested":
                 try:
                     for spineSerialNumber in d['device_vars'].keys():
-                        self.previous_device_vars[spineSerialNumber] = defaultdict(list)
+                        #spine = self.previous_device_vars.setdefault(spineSerialNumber, {})
 
                         for row in d['device_vars'][spineSerialNumber]['data']:
 
@@ -692,25 +505,20 @@ class Manager:
                                 continue
 
                             # row[0] -> serialNumber
-                            self.previous_device_vars.setdefault(row[0], defaultdict(list))
-
-                            for i, column in enumerate(d['device_vars'][spineSerialNumber]['columns']):
-                                # serialNumber and hostname are used to init Switch class and should not be lists
-                                if column == 'serialNumber':
-                                    self.previous_device_vars[row[0]][column] = row[i]
-                                    column = 'leaf_serialNumber'
-                                elif column == 'hostname':
-                                    self.previous_device_vars[row[0]][column] = row[i]
-                                    column = 'leaf_hostname'
-                                else:
-                                    self.previous_device_vars[row[0]][column].append(row[i])
-
-                                self.previous_device_vars[spineSerialNumber][column].append(row[i])
-                            self.previous_device_vars[row[0]]['spine_hostname'].append(spineSerialNumber)
-                                
-                            #_vars = OrderedDict(zip(d['device_vars'][spineSerialNumber]['columns'], row))
-                            #_vars['__link__'] = row
-                            #self.previous_device_vars[spineSerialNumber][_vars['serialNumber']] = _vars
+                            # these will be individual leaf records with spine references
+                            leaf = self.previous_device_vars.setdefault(row[0], {})
+                            # sN and host indexes are known
+                            leaf['serialNumber'] = row[0]
+                            leaf['hostname'] = row[1]
+                            
+                            # init rows to list and prevent overwrite and allow appending to
+                            leaf_row = leaf.setdefault('data', [])
+                            # for multiple leaf records in each spine tab append the data to 'rows' with sN and host stripped out
+                            rest_of_leaf_data = dict(zip(d['device_vars'][spineSerialNumber]['columns'][2:], row[2:]))
+                            # each row will have a parent spine pointer
+                            rest_of_leaf_data['spine'] = spineSerialNumber
+                            leaf_row.append(rest_of_leaf_data)
+                            
 
                 except Exception as e:
                     print(e)
@@ -720,7 +528,7 @@ class Manager:
                         if not any(row):
                             continue
                         _vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'], row))
-                        #_vars['__link__'] = row
+                        _vars['__link__'] = row
                         self.previous_device_vars[_vars['serialNumber']] = _vars
                 except Exception as e:
                     print(e)
@@ -759,40 +567,30 @@ class Manager:
         if self.mode == "nested":
 
             try:
-                """ for spineSerialNumber in d['device_vars'].keys():
-                    self.current_device_vars[spineSerialNumber] = {}
+                for spineSerialNumber in d['device_vars'].keys():
+                    # spine = self.current_device_vars.setdefault(spineSerialNumber, {})
+
                     for row in d['device_vars'][spineSerialNumber]['data']:
+
                         if not any(row):
                             continue
-                        _vars = OrderedDict(zip(d['device_vars'][spineSerialNumber]['columns'], row))
-                        _vars['__link__'] = row
-                        self.current_device_vars[spineSerialNumber][_vars['serialNumber']] = _vars """
 
-                for spineSerialNumber in d['device_vars'].keys():
-                        self.current_device_vars[spineSerialNumber] = defaultdict(list)
+                        # row[0] -> serialNumber
+                        # these will be individual leaf records with spine references
+                        leaf = self.current_device_vars.setdefault(row[0], {})
+                        # sN and host indexes are known
+                        leaf['serialNumber'] = row[0]
+                        leaf['hostname'] = row[1]
+                        
+                        # init rows to list and prevent overwrite and allow appending to
+                        leaf_row = leaf.setdefault('data', [])
+                        # for multiple leaf records in each spine tab append the data to 'rows' with sN and host stripped out
+                        rest_of_leaf_data = dict(zip(d['device_vars'][spineSerialNumber]['columns'][2:], row[2:]))
+                        # each row will have a parent spine pointer
+                        rest_of_leaf_data['spine'] = spineSerialNumber
+                        leaf_row.append(rest_of_leaf_data)
+                            
 
-                        for row in d['device_vars'][spineSerialNumber]['data']:
-
-                            if not any(row):
-                                continue
-
-                            # row[0] -> serialNumber
-                            self.current_device_vars.setdefault(row[0], defaultdict(list))
-
-                            for i, column in enumerate(d['device_vars'][spineSerialNumber]['columns']):
-                                # serialNumber and hostname are used to init Switch class and should not be lists
-                                if column == 'serialNumber':
-                                    self.current_device_vars[row[0]][column] = row[i]
-                                    column = 'leaf_serialNumber'
-                                elif column == 'hostname':
-                                    self.current_device_vars[row[0]][column] = row[i]
-                                    column = 'leaf_hostname'
-                                else:
-                                    self.current_device_vars[row[0]][column].append(row[i])
-
-                                self.current_device_vars[spineSerialNumber][column].append(row[i])
-
-                            self.current_device_vars[row[0]]['spine_hostname'].append(spineSerialNumber)
             except Exception as e:
                 print(e)
         else:
@@ -805,7 +603,7 @@ class Manager:
                     self.current_device_vars[_vars['serialNumber']] = _vars
             except Exception as e:
                 print(e)
-        
+
     def stageDeployment(self, d, loadInventory=True,  loadConfiglets=True, loadContainers=False, skipCvp=False):
         LOGGER.log_noTs("-initializing internal state: please wait...")
 
@@ -834,36 +632,43 @@ class Manager:
         
         iterables = {}
         if 'iterables' in d:
-            for data in d['iterables'].values():
-                for i, column in enumerate(data['columns']):
-                    _data = [v[i] for v in data['data']]
-                    if not any(_data):
+            for tab, collection in d['iterables'].items():
+                tab = tab.replace('#','')
+                iterables[tab] = []
+                # collection is an object with keys: data, columns
+                for row in collection['data']:
+                    # skip blank rows
+                    if not any(row):
                         continue
-                    iterables[column] = _data
+                    iterables[tab].append(dict(zip(collection['columns'], row)))
 
         if self.mode == 'nested':
 
+            for serialNumber in searchConfig('spines'):
+                _cvp_record = CVP.getBySerial(serialNumber)
+                self.COMPILE_FOR.append(Switch(params = {'data':[]}, cvpDevice = _cvp_record if _cvp_record else {'serialNumber': serialNumber, 'hostname': 'NOT_IN_CVP'}))
+
             for serialNumber, data in device_vars.items():
 
-                cvp_record = CVP.getBySerial(serialNumber)
+                for row in data['data']:
+                    row['spine'] = getBySerial(row['spine'])
 
-                # original data has SerialNumbers; need to translate to hostnames here
-                if 'spine_hostname' in data:
-                    spine_hostnames = []
-                    for _serialNumber in data['spine_hostname']:
-                        _cvp_record = CVP.getBySerial(_serialNumber)
-                        spine_hostnames.append(_cvp_record['hostname'] if _cvp_record else 'NOT_IN_CVP')
-                    data['spine_hostname'] = spine_hostnames
+                _leaf = Switch(data)
+                self.COMPILE_FOR.append(_leaf)
 
-                if not cvp_record:
-                    # leaf
-                    if 'spine_hostname' in data:
-                        self.COMPILE_FOR.append(Switch(data))
-                    # spine
-                    else:
-                        self.COMPILE_FOR.append(Switch({'serialNumber': serialNumber, 'hostname': 'NOT_IN_CVP', **data}))
-                else:
-                    self.COMPILE_FOR.append(Switch(data, cvp_record))
+                for row in _leaf.data:
+                    row['leaf'] = _leaf
+
+                for spine in self.SPINES:
+                    for row in _leaf.data:
+                        if row['spine'] == spine:
+                            spine.data.append(row)
+            
+            if not skipCvp:
+                for device in self.COMPILE_FOR:
+                    if device.loadCVPRecord():
+                        device.loadCVPConfiglets()
+
 
         else:
             for serialNumber in searchSource('compile_for', d, []):
@@ -872,7 +677,7 @@ class Manager:
                 if not skipCvp and device.loadCVPRecord():
                     device.loadCVPConfiglets()
                 self.COMPILE_FOR.append(device)
-        
+
         self.CONFIG = {**variables, **iterables, **self.CONFIG}
         self.CONFIG['selected_templates'] = searchSource('selected_templates', d, [])
         self.CONFIG['name'] = self.name
@@ -1040,7 +845,8 @@ class Manager:
                         varsDict = searchSource(serialNumber, self.previous_device_vars, {})
                         varsDict['container'] = moveContainer
                         link = varsDict['__link__']
-                        #this updates the actual row data in self.last_deployed_var without __link__
+                        # this updates the actual row data in self.last_deployed_var [:-1] removes __link__ from ordered dict
+                        # in turn if all is well this updates in the DB
                         link[:] = list(varsDict)[:-1]
                 except (CvpApiError) as e:
                     LOGGER.log_noTs("--exception moving containers, please try again; aborting")
@@ -1112,13 +918,6 @@ class Manager:
             # if it failed on any of the cvprac calls then the configlets might have been partially removed from CVP but not reflected in the DB for last_deployed_vars
             # worst case scenario we can now rerun and remove non existent cvp configlets and finally update the db
             if self._verifyLastDeployment() and self._sync():
-                
-                # ===============================================================
-                # if self.current_deployment_var == self.last_deployed_var:
-                #     LOGGER.log_noTs('')
-                #     LOGGER.log_noTs("Nothing to do")
-                #     return True
-                # ===============================================================
                 
                 try:
                     self.dbRecord.last_deployment = int(time.time())
@@ -1192,12 +991,35 @@ class Manager:
         self.tasks_to_deploy = []
         LOGGER.log("Done: Debug")
         
+def show_diff(text, n_text):
+    """
+    http://stackoverflow.com/a/788780
+    Unify operations between two compared strings seqm is a difflib.
+    SequenceMatcher instance whose a & b are strings
+    """
+    seqm = difflib.SequenceMatcher(None, text, n_text)
+    output= []
+    previous = ''
+    for opcode, a0, a1, b0, b1 in seqm.get_opcodes():
+        if opcode == 'equal':
+            previous = str(seqm.a[a0:a1])
+        elif opcode == 'insert':
+            output.append('...' + previous[-14:] + "<font color=red style='background:chartreuse'>^" + seqm.b[b0:b1] + "</font>")
+        elif opcode == 'delete':
+            output.append('...' + previous[-14:] + "<font color=blue style='background:chartreuse'>^" + seqm.a[a0:a1] + "</font>")
+        elif opcode == 'replace':
+            # seqm.a[a0:a1] -> seqm.b[b0:b1]
+            output.append('...' + previous[-14:] + "<font color=green style='background:chartreuse'>^" + seqm.b[b0:b1] + "</font>")
+        else:
+            raise RuntimeError("unexpected opcode")
+    return ''.join(output)
 
 # get if dict, getattr if else
 def searchSource(key, source, default = None):
-    if type(source) is dict:
+    _type = type(source)
+    if _type is dict or _type is OrderedDict:
         return source.get(key, default)
-    elif type(source) is list:
+    elif _type is list:
         for _source in source:
             found = searchSource(key, _source, default)
             if found != default:
@@ -1217,7 +1039,9 @@ def searchConfig(key, default = None):
             config = MANAGER.CONFIG['global'][key]
         except:
             return config
-    if type(config) == list or dict:
+
+    _type = type(config)
+    if _type is list or _type is dict or _type is OrderedDict:
         return config
     
     if config.lower() == 'true':
@@ -1228,124 +1052,17 @@ def searchConfig(key, default = None):
     return config
 
 def getKeyDefinition(key, source):
-    csv_telemetry_source = key.split('#')
-    
-    path = None
-    truncate = None
-    op = None
-    qty = None
-    
-    if len(csv_telemetry_source) == 2:
-         
-        path = csv_telemetry_source[0]
-        key  = csv_telemetry_source[1]
-    
-    math = parseForMath(key)
-    
-    #can't truncate math op's; so either or
-    if math:
-        key, op, qty = math[0]
-    else:
-        key, truncate = parseForTruncation(key)[0]
-        
-    if truncate:
-        start, end = truncate[1:-1].split(':')
-        start = int(start) if start else None
-        end = int(end) if end else None
-    else:
-        start = None
-        end = None
-    
-    def truncateValues(values, start = None, end = None):
-        if type(values) == list:
-            return [str(val)[start:end] for val in values]
-        else:
-            return str(values)[start:end]
-
-    def fetchTelemOrFileData(path, key):
-        if path.startswith('/') and hasattr(CVP, 'cvprac'):
-            #this is super hacked need a telemetry Data Model parser. cvp-connector has one but in js
+    toReturn = searchSource(key, source) or searchConfig(key)
+    if toReturn == 'ERROR' or not toReturn:
+        toReturn = None
             
-            try:
-                found = CVP.cvprac.get('/api/v1/rest/' + searchSource('serialNumber', source, '').upper() + path)
-                found = found['notifications'][0]['updates'][key]['value']
-
-                if type(found) == dict:
-                    __keys = found.keys()
-                    if 'Value' in __keys:
-                        found = found['Value']
-                    elif 'value' in __keys:
-                        found = found['value']
-                    _type, val = next(iter(found.items()))
-                    return val
-                else:
-                    return found
-            except:
-                LOGGER.log("-failed to properly fetch/decode telemetry data")
-                return None
-        return None
-    
-    if path:
-        toReturn = fetchTelemOrFileData(path, key)
-    elif key.isdigit():
-        toReturn = key
-    else:
-        toReturn = searchSource(key, source) or searchConfig(key)
-
-        if toReturn == 'ERROR' or not toReturn or (type(toReturn)==list and not all(toReturn)):
-            toReturn = None
-            
-    if math:
-        return (toReturn, op, qty)
-    elif truncate:
-        return truncateValues(toReturn, start, end)
-    else:
-        return toReturn
-
-def cleanRemoveWrap(text):
-    text = re.escape(text)
-    return '[ \t]*{0}[\t ]*(?:\r\n|\n)'.format(text)
-
-def parseForRequiredKeys(template):
-    return re.findall('{(.*?)}', template)
-
-def parseForIterables(template):
-    return re.findall('([\t ]*)(\[[\s\S]*?\](?![\s]*else))', template)
-    #return re.findall('(^\s*)\[[\s\S]*?\](?!else)', template)
-
-def parseForSections(template):
-    return re.findall('(@[\s\S]*?@)({.*?})*', template)
-
-def parseForTruncation(key):
-    return re.findall('([\w]+)(\([-+]?\d*:[-+]?\d*\))?', key)
-
-def parseForMath(key):
-    return re.findall('(\w+)([+\-*]+)(\d+)?', key)
-
-#builds a tuple of values followed by a comparator lambda
-#used to check if tests pass while supporting section injections from the global variable space
-def buildConditionTest(keys):
-    condition_list = []
-    _keys = keys.split('&')
-    for key in _keys:
-        key = re.split('([^a-z0-9A-Z_]+)', key)
-        if len(key) > 1:
-            condition = key[1]
-            if condition == '=':
-                condition_fn = lambda key, value, source = None : value == getKeyDefinition(key, source)
-            else:
-                condition_fn = lambda key, value, source = None : value != getKeyDefinition(key, source)
-            condition_list.append( ((key[0], key[2]), condition_fn) )
-        else:
-            
-            condition_list.append( ((key[0],), lambda key, source = None : bool(getKeyDefinition(key, source))) )
-    return condition_list
+    return toReturn
 
 def buildValueDict(source, template):
     valueDict = {}
     valueDict['error'] = []
     
-    keys = parseForRequiredKeys(template)
+    keys = meta.find_undeclared_variables(template)
 
     for key in keys:
         #check if dict already has defined
@@ -1365,11 +1082,9 @@ def getBySerial(serialNumber):
 def getByHostname(hostname):
     return searchSource(hostname, MANAGER.HOST_TO_DEVICE, {})
 
-
 def send_message(conn, message):
     message = json.dumps(message)
     conn.sendall('{}\n'.format(message).encode())
-
 
 def read_message(conn):
     buffer = b''
@@ -1380,8 +1095,6 @@ def read_message(conn):
             break
         buffer = buffer + d
     return json.loads(buffer.decode())
-
-
 
 def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

@@ -2,7 +2,6 @@ from django.db import models
 from django.contrib.postgres.fields import JSONField
 
 
-
 # Create your models here.
 def defaultTemplate():
     return {
@@ -38,3 +37,5 @@ class Global_Config(models.Model):
     class Meta:
         verbose_name = 'Global Configuration'
         verbose_name_plural = 'Global Configurations'
+
+        
