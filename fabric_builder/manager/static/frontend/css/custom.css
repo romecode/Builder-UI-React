@@ -25,3 +25,91 @@ a.nav-item span {
     font-size: 10px;
     text-align: center;
 }
+.bg-arista {
+	background-color:#3A6593;
+}
+
+ .navbar-header {
+	 height: 45px;
+	 padding: 0px;
+ }
+ 
+ .navbar .alert {
+	margin: 4px;
+    width: 200px;
+    padding: 4px 8px;
+ }
+
+ .arista-logo {
+    height: 16px;
+    margin-left: 17px;
+    margin-right: 20px;
+}
+.sidebar{
+	width: 250px;
+}
+.app-content {
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid #cdd5dd;
+    flex: 75;
+    overflow: hidden;
+}
+.nav-menu-default .nav-item a.active {
+    background-color: #cedeef;
+}
+.nav-menu-default li.nav-menu-heading-1 a {
+    color: #38414b;
+}
+.nav-menu-default .nav-item a.active:hover {
+    background-color: #bbd1e9;
+}
+.nav-menu-default .nav-item a:hover {
+    background-color: #f0f2f4;
+}
+.app-sidebar {
+    display: flex;
+    flex-direction: column;
+    flex: 25;
+    overflow-y: hidden;
+}
+.app-content{
+	height:100%;
+}
+.devices-sidebar {
+    flex: none;
+    width: 250px;
+}
+
+.app-main {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+	display: flex;
+	height: 100%;
+    flex-direction: row;
+    overflow-y: hidden;
+}
+.card {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 700px;
+    min-width: 0;
+    padding: 0px 20px 50px 20px;
+    z-index: 0;
+}
+html, body, .app-main-container {
+	height: 100%;
+}
+.app-main-container {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: hidden;
+}
+.app-content ._loading_overlay_wrapper{
+	height:100%;
+}

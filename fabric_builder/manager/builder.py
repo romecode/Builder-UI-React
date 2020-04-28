@@ -5,10 +5,9 @@ import datetime
 import xlrd
 import socket
 import json
-from manager.extensions import SwitchBase
 from collections import OrderedDict, defaultdict
 from types import SimpleNamespace
-from manager.ansible_filters import FilterModule
+from ansible.plugins.filter.ipaddr import FilterModule
 
 
 LOGGER = None
@@ -35,6 +34,8 @@ from jinja2 import BaseLoader, TemplateNotFound, Environment, meta
 from collections.abc import MutableMapping
 
 import difflib
+
+from ipaddress import ip_address, ip_network
         
 class Telemetry(MutableMapping):
     """A dictionary that applies an arbitrary key-altering
@@ -72,22 +73,26 @@ class Telemetry(MutableMapping):
             
             try:
                 found = CVP.cvprac.get('/api/v1/rest/' + self.serialNumber.upper() + path)
+                if not found['notifications']:
+                    LOGGER.log_noTs("-telemetry data for {0} not found".format(path+'/'+key), "red")
+                    return 'STOP'
                 found = found['notifications'][0]['updates'][key]['value']
+                if found:
+                    if type(found) == dict:
+                        __keys = found.keys()
+                        if 'Value' in __keys:
+                            found = found['Value']
+                        elif 'value' in __keys:
+                            found = found['value']
+                        _type, val = next(iter(found.items()))
+                        return val
+                    else:
+                        return found
+            except (KeyError, IndexError, CvpClientError, CvpApiError) as e:
+                LOGGER.log_noTs("-failed to properly fetch/decode telemetry data for {0}".format(path+'/'+key), "red")
+                LOGGER.log_noTs("-exception: {0}".format(e), "red")
 
-                if type(found) == dict:
-                    __keys = found.keys()
-                    if 'Value' in __keys:
-                        found = found['Value']
-                    elif 'value' in __keys:
-                        found = found['value']
-                    _type, val = next(iter(found.items()))
-                    return val
-                else:
-                    return found
-            except:
-                LOGGER.log_noTs("-failed to properly fetch/decode telemetry data for {0}".format(key))
-                return None
-        return None
+        return 'STOP'
 
     
  
@@ -96,29 +101,34 @@ class Log:
         fabric_builder_log = open(MODULE_DIR + '/fabric_builder_log.txt', 'w')
         fabric_builder_log.close()
         
-    def log(self,string, stamp = True):
+    def log(self, string, color = None):
         fabric_builder_log = open(MODULE_DIR + '/fabric_builder_log.txt', 'a')
         fabric_builder_log_complete = open(MODULE_DIR + '/fabric_builder_log_complete.txt', 'a')
         
         string = "{0}: {1}\n".format( datetime.datetime.now().strftime('%a %b %d %H:%M'), string )
         sys.stderr.write(string)
+        string = self.wrap(string, color)
         fabric_builder_log.write(string)
         fabric_builder_log.close()
         
         fabric_builder_log_complete.write(string)
         fabric_builder_log_complete.close()
         
-    def log_noTs(self, string):
+    def log_noTs(self, string, color = None):
         fabric_builder_log = open(MODULE_DIR + '/fabric_builder_log.txt', 'a')
         fabric_builder_log_complete = open(MODULE_DIR + '/fabric_builder_log_complete.txt', 'a')
         
         string = "{0}\n".format( string )
         sys.stderr.write(string)
+        string = self.wrap(string, color)
         fabric_builder_log.write(string)
         fabric_builder_log.close()
         
         fabric_builder_log_complete.write(string)
         fabric_builder_log_complete.close()
+    
+    def wrap(self, string, color):
+        return "<font color={0}>{1}</font>".format(color, string)
 
 
 class Cvp:
@@ -137,15 +147,15 @@ class Cvp:
         LOGGER.log("Successfully authenticated to CVP")
         
     def loadContainers(self):
-        LOGGER.log_noTs("-loading CVP containers: please wait...")
+        LOGGER.log_noTs("-loading CVP containers: please wait...", "green")
         self.containers = {item['name'].lower():item for item in self.cvprac.api.get_containers()['data']}
 
     def loadConfiglets(self):
-        LOGGER.log_noTs("-loading CVP configlets: please wait...")
+        LOGGER.log_noTs("-loading CVP configlets: please wait...", "green")
         self.configlets = {item['name'].lower():item for item in self.cvprac.api.get_configlets()['data']}
         
     def loadInventory(self):
-        LOGGER.log_noTs("-loading CVP inventory: please wait...")
+        LOGGER.log_noTs("-loading CVP inventory: please wait...", "green")
         for device in self.cvprac.api.get_inventory():
             #if device['parentContainerId'] != "undefined_container":
             serialNumber = device['serialNumber']
@@ -187,12 +197,12 @@ class Cvp:
                     devices.append(device)
                     continue
             except KeyError:
-                LOGGER.log_noTs("Could not find {0}".format(_search))
+                LOGGER.log_noTs("Could not find {0}".format(_search), "red")
         return devices
     
     def createConfiglet(self, configlet_name, configlet_content):
         # Configlet doesn't exist let's create one
-        LOGGER.log_noTs("--creating configlet {0}; please wait...".format(configlet_name))
+        LOGGER.log_noTs("--creating configlet {0}; please wait...".format(configlet_name), "green")
         self.cvprac.api.add_configlet(configlet_name, configlet_content)
         return self.cvprac.api.get_configlet_by_name(configlet_name)
                 
@@ -200,24 +210,24 @@ class Cvp:
     def updateConfiglet(self, configlet, new_configlet_content):
         # Configlet does exist, let's update the content only if not the same (avoid empty task)
         configlet_name = configlet['name']
-        LOGGER.log_noTs("--found configlet {0}".format(configlet_name))
+        LOGGER.log_noTs("--found configlet {0}".format(configlet_name), "green")
 
         if configlet['config'] != new_configlet_content:
-            LOGGER.log_noTs("---updating configlet {0}; please wait...".format(configlet_name))
+            LOGGER.log_noTs("---updating configlet {0}; please wait...".format(configlet_name), "green")
             self.cvprac.api.update_configlet(new_configlet_content, configlet['key'], configlet_name)
         else:
-            LOGGER.log_noTs("---nothing to do")
+            LOGGER.log_noTs("---nothing to do", "green")
         return self.cvprac.api.get_configlet_by_name(configlet_name)
                 
     def deployDevice(self, device, container, configlets_to_deploy):
         try:
             ids = self.cvprac.api.deploy_device(device.cvp, container, configlets_to_deploy)
         except CvpApiError:
-            LOGGER.log_noTs("---deploying device {0}: failed, could not get task id from CVP".format(device.hostname))
+            LOGGER.log_noTs("---deploying device {0}: failed, could not get task id from CVP".format(device.hostname), "red")
         else:
             ids = ','.join(map(str, ids['data']['taskIds']))
-            LOGGER.log_noTs("---deploying device {0}: {1} to {2} container".format(device.hostname, device.mgmt_ip, device.container))
-            LOGGER.log_noTs("---CREATED TASKS {0}".format(ids))
+            LOGGER.log_noTs("---deploying device {0}: {1} to {2} container".format(device.hostname, device.mgmt_ip, device.container), "green")
+            LOGGER.log_noTs("---CREATED TASKS {0}".format(ids), "green")
             
     def applyConfiglets(self, to, configlets):
         app_name = "CVP Configlet Builder"
@@ -230,13 +240,13 @@ class Cvp:
         for dest in to:
             toContainer = self.getContainerByName(dest)
             if toContainer:
-                LOGGER.log_noTs("---applying configlets to {0}; please wait...".format(toContainer.name))
+                LOGGER.log_noTs("---applying configlets to {0}; please wait...".format(toContainer.name), "green")
                 _result = self.cvprac.api.apply_configlets_to_container(app_name, toContainer, configlets)
                 dest = toContainer
             else:
                 #apply to device
                 toDevice = getBySerial(dest)
-                LOGGER.log_noTs("---applying configlets to {0}; please wait...".format(dest))
+                LOGGER.log_noTs("---applying configlets to {0}; please wait...".format(dest), "green")
                 _result = self.cvprac.api.apply_configlets_to_device(app_name, toDevice.cvp, configlets) if toDevice.cvp else None
                 
             if not (toDevice or toContainer):
@@ -244,7 +254,7 @@ class Cvp:
                 LOGGER.log_noTs("---failed to push {0}; {1} not found".format(','.join(errorOn), dest))
             elif _result and _result['data']['status'] == 'success':
                 
-                LOGGER.log_noTs("---CREATED TASKS {0}".format(','.join(map(str, _result['data']['taskIds']))))
+                LOGGER.log_noTs("---CREATED TASKS {0}".format(','.join(map(str, _result['data']['taskIds']))), "green")
                 
         return None
     
@@ -261,8 +271,8 @@ class Task:
         LOGGER.log_noTs("******* {0} / {1} *******".format(self.device.hostname, self.device.serialNumber))
         
         for name, configlet in self.device.to_deploy:
-            
-            new_configlet_content, compile_info = configlet.compile(self.device)
+            LOGGER.log_noTs("compilation log:")
+            new_configlet_content = configlet.compile(self.device)
             name_lower = name.lower()
 
             exists = searchSource(name_lower, CVP.configlets, False)
@@ -277,34 +287,30 @@ class Task:
             if not exists:
                 if ignoreDeleted:
                     continue
-                LOGGER.log_noTs("Configlet does not exist: {0}".format(name))
+                LOGGER.log_noTs("Configlet does not exist: {0}".format(name), "red")
                 error += 1
             elif not assigned and match:
                 if ignoreNotAssigned:
                     continue
-                LOGGER.log_noTs("Configlet not assigned: {0}".format(name))
+                LOGGER.log_noTs("Configlet not assigned: {0}".format(name), "red")
                 error += 1
             elif not assigned and not match:
                 if ignoreNotAssigned_Mismatched:
                     continue
-                LOGGER.log_noTs("Configlet does not match and is not assigned: {0}".format(name))
-                LOGGER.log_noTs("compilation log:")
-                LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
+                LOGGER.log_noTs("Configlet does not match and is not assigned: {0}".format(name), "red")
                 LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(show_diff(new_configlet_content, exists['config']))
                 LOGGER.log_noTs('-'*50)
                 error += 1
             elif assigned and not match:
-                LOGGER.log_noTs("Configlet does not match: {0}".format(name))
-                LOGGER.log_noTs("compilation log:")
-                LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
+                LOGGER.log_noTs("Configlet does not match: {0}".format(name), "red")
                 LOGGER.log_noTs('-'*50)
                 LOGGER.log_noTs(show_diff(new_configlet_content, exists['config']))
                 LOGGER.log_noTs('-'*50)
                 
                 error += 1
         if not error:
-            LOGGER.log_noTs("Device is consistent with CVP")        
+            LOGGER.log_noTs("Device is consistent with CVP", "green")        
         
         LOGGER.log_noTs('')
         
@@ -323,7 +329,7 @@ class Task:
             if self.device.cvp['parentContainerId'] == "undefined_container" and container:
                 CVP.deployDevice(self.device, container, configlet_keys)
             elif self.device.cvp['parentContainerId'] == "undefined_container" and not container:
-                LOGGER.log("---cannot deploy {0}; non-provisioned device with no destination container defined".format(self.device.hostname))
+                LOGGER.log_noTs("---cannot deploy {0}; non-provisioned device with no destination container defined".format(self.device.hostname), "red")
             else:
                 CVP.applyConfiglets(self.device.serialNumber, configlet_keys) 
                 
@@ -332,11 +338,11 @@ class Task:
         LOGGER.log_noTs("******* {0} / {1} *******".format(self.device.hostname.upper(), self.device.serialNumber.upper()))
         
         for name, configlet in self.device.to_deploy:
-            new_configlet_content, compile_info = configlet.compile(self.device)
+            
             LOGGER.log_noTs('CONFIGLET NAME: '+ name)
 
             LOGGER.log_noTs("compilation log:")
-            LOGGER.log_noTs('\n'.join(compile_info) if compile_info else "-no messages")
+            new_configlet_content = configlet.compile(self.device)
             LOGGER.log_noTs("compiled:")
             LOGGER.log_noTs('-'*50)
             LOGGER.log_noTs(new_configlet_content)
@@ -374,17 +380,13 @@ class Task:
         self.device.to_deploy = []
 
 
-class Switch(SwitchBase):
+class Switch:
 
     def __init__(self, params={}, cvpDevice={}):
-        super(Switch, self).__init__()
         # list to hold leaf compiled spine underlay interface init
         self.underlay_inject = []
         self.to_deploy = []
         self.cvp = {}
-
-        self.MANAGER = MANAGER
-        self.deployments = Deployment
 
         for k, v in params.items():
             setattr(self, k, v)
@@ -392,7 +394,7 @@ class Switch(SwitchBase):
         self.hostname = searchSource('hostname', self) or searchSource('hostname', cvpDevice)
         self.serialNumber = searchSource('serialNumber', self) or searchSource('serialNumber', cvpDevice)
         
-        LOGGER.log_noTs("-loading {0}".format(self.hostname or self.serialNumber))
+        LOGGER.log_noTs("-loading {0}".format(self.hostname or self.serialNumber), "green")
         
         MANAGER.DEVICES[self.serialNumber] = self
         MANAGER.HOST_TO_DEVICE[self.hostname] = self
@@ -405,14 +407,14 @@ class Switch(SwitchBase):
     
     def loadCVPRecord(self):
         self.cvp = searchSource(self.serialNumber, CVP.devices, {})
-        LOGGER.log_noTs("-loading CVP record: {0}".format('success' if self.cvp else 'not found'))
+        LOGGER.log_noTs("-loading CVP record: {0}".format('success' if self.cvp else 'not found'), "green")
         if not self.cvp:
             return False
         return True
         
     def loadCVPConfiglets(self):
         success = CVP.loadDeviceConfiglets(self.serialNumber)
-        LOGGER.log_noTs("-loading CVP configlets: {0}".format('success' if success else 'not found'))
+        LOGGER.log_noTs("-loading CVP configlets: {0}".format('success' if success else 'not found'), "green")
     
     def searchConfig(self, key):
         return searchConfig(key)
@@ -430,17 +432,294 @@ class Switch(SwitchBase):
      
     def compile_configlet(self, template):
         # TODO: MAKE HANDLE LIST LOOKUPS, RIGHT NOW ONLY WORKS FOR ONE CONTAINER OR ONE DEVICE i.e. USELESS
-        exception = getattr(template, "skip_container", None)
-        if exception == self.role:
-            return ('',[])
-        exception = getattr(template, "skip_device", None)
-        if exception == self.serialNumber:
-            return ('',[])
+
         return template.compile(self)
+
+    # the property definitions should return ERROR if the search for a definition should not look in the global config
+    # e.g. we do not want mlag_address to return the global config variable for every device
+    # otherwise return None
 
     @property
     def telemetry(self):
         return Telemetry(self.serialNumber)
+          
+    @property
+    def spine_lo0_list(self):
+        return [spine.loopback0 for spine in MANAGER.SPINES if spine.loopback0]
+        
+    
+    @property
+    def spine_lo1_list(self):
+        return [spine.loopback1 for spine in MANAGER.SPINES if spine.loopback1]
+    
+    @property
+    def to_spine__hostname_ip__tuple_list(self):
+        found = []
+        try:   
+            # this is expected to be a "nested" deployment profile
+            d = Deployment.objects.get(name='Underlay')
+
+            if self.__context__ == 'current' and MANAGER.name == 'Underlay':
+                source = d.current_deployment_var['device_vars']
+            elif d.last_deployment:
+                source = d.last_deployed_var['device_vars']
+            else:
+                raise ValueError('deployment profile "Underlay" not deployed')
+
+            for spine_serial_number, collection in source.items():
+                spine_ip_index = collection['columns'].index('spine_Ip')
+                spine_hostname = MANAGER.DEVICES[spine_serial_number].hostname
+
+                for row in collection['data']:
+                    spine_ip = row[spine_ip_index]
+                    if row[0] == self.serialNumber and spine_ip:
+                        found.append((spine_hostname, spine_ip))
+            return found
+
+        except Deployment.DoesNotExist as e:
+            LOGGER.log_noTs('-exception in to_spine__hostname_ip__tuple_list: deployment profile "Underlay" not found', "red")
+        except (KeyError, TypeError, ValueError) as e:
+            LOGGER.log_noTs("-exception in to_spine__hostname_ip__tuple_list: {0}".format(e), "red")
+
+        return 'STOP'
+
+    @property
+    def spine_hostname_list(self):
+        return [spine.hostname for spine in MANAGER.SPINES]
+
+    @property
+    def loopback0(self):
+        try:
+            return self._loopback0
+        except:
+            pass
+
+        try:
+            # this is expected to be a "flat" deployment profile
+            d = Deployment.objects.get(name='Loopback')
+
+            if self.__context__ == 'current' and MANAGER.name == 'Loopback':
+                source = d.current_deployment_var['device_vars']['Tab0']
+            elif d.last_deployment:
+                source = d.last_deployed_var['device_vars']['Tab0']
+            else:
+                raise ValueError('deployment profile "Loopback" not deployed')
+            
+            record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+            lo0_index = source['columns'].index('loopback0')
+            record = record[lo0_index]
+
+            if record:
+                return record
+
+        except Deployment.DoesNotExist:
+            LOGGER.log_noTs('-exception in loopback0: deployment profile "Loopback" not found', "orange")
+        except StopIteration:
+            LOGGER.log_noTs('-exception in loopback0: {0} not defined in "Loopback" deployment profile'.format(self.hostname), "orange")
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            LOGGER.log_noTs("-exception in loopback0: {0}".format(e), "orange")
+        
+        LOGGER.log_noTs("--trying telemetry", "orange")
+        return self.telemetry['/Sysdb/ip/config/ipIntfConfig/Loopback0#addrWithMask']
+
+    @loopback0.setter
+    def loopback0(self, lo0):
+        if lo0:
+            self._loopback0 = lo0
+    
+    @property
+    def loopback1(self):
+        try:
+            return self._loopback1
+        except:
+            pass
+
+        try:
+            # this is expected to be a "flat" deployment profile
+            d = Deployment.objects.get(name='Loopback')
+
+            if self.__context__ == 'current' and MANAGER.name == 'Loopback':
+                source = d.current_deployment_var['device_vars']['Tab0']
+            elif d.last_deployment:
+                source = d.last_deployed_var['device_vars']['Tab0']
+            else:
+                raise ValueError('deployment profile "Loopback" not deployed')
+
+            record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+            lo1_index = source['columns'].index('loopback1')
+            record = record[lo1_index]
+            if record:
+                return record
+
+        except Deployment.DoesNotExist:
+            LOGGER.log_noTs("-exception in loopback1: deployment profile not found", "orange")
+        except StopIteration:
+            LOGGER.log_noTs('-exception in loopback1: {0} not defined in "Loopback" deployment profile'.format(self.hostname), "orange")
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            LOGGER.log_noTs("-exception in loopback1: {0}".format(e), "orange")
+        
+        LOGGER.log_noTs("--trying telemetry", "orange")
+        return self.telemetry['/Sysdb/ip/config/ipIntfConfig/Loopback1#addrWithMask']
+            
+    @loopback1.setter
+    def loopback1(self, lo1):
+        if lo1:
+            self._loopback1 = lo1
+
+    @property
+    def asn(self):
+        try:
+            return self._asn
+        except:
+            pass
+
+        try:
+            # this is expected to be a "flat" deployment profile
+            d = Deployment.objects.get(name='Loopback')
+
+            if self.__context__ == 'current' and MANAGER.name == 'Loopback':
+                source = d.current_deployment_var['device_vars']['Tab0']
+            elif d.last_deployment:
+                source = d.last_deployed_var['device_vars']['Tab0']
+            else:
+                raise ValueError('deployment profile "Loopback" not deployed')
+
+            record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+            asn_index = source['columns'].index('asn')
+            record = record[asn_index]
+            if record:
+                return record
+
+        except Deployment.DoesNotExist:
+            LOGGER.log_noTs('-exception in asn: deployment profile "Loopback" not found', "orange")
+        except StopIteration:
+            LOGGER.log_noTs('-exception in asn: {0} not defined in "Loopback" deployment profile'.format(self.hostname), "orange")
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            LOGGER.log_noTs("-exception in asn: {0}".format(e), "orange")
+        
+        LOGGER.log_noTs("--trying telemetry", "orange")
+        return self.telemetry['/Sysdb/routing/bgp/config#asNumber']
+
+    @asn.setter
+    def asn(self, asn):
+        if asn:
+            self._asn = asn
+
+    @property
+    def mlag_address(self):
+        # this will be available only if we are in a template context which defines mlag_address directly in the device variable table in the "current" context
+        try:
+            return self._mlag_address
+        except:
+            pass
+
+        # try to find data in the MLAG deployment profile
+        try:
+            # this is expected to be a "flat" deployment profile
+            d = Deployment.objects.get(name='MLAG')
+            
+            # go this route if we are debugging the current context from the MLAG deployment profile itself
+            if self.__context__ == 'current' and MANAGER.name == 'MLAG':
+                source = d.current_deployment_var['device_vars']['Tab0']
+                record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+            # otherwise always use the last deployed data
+            elif d.last_deployment:
+                source = d.last_deployed_var['device_vars']['Tab0']
+                record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+
+                #maybe it's defined in the last deployment?
+                mlag_address_index = source['columns'].index('mlag_address')
+                mlag_address = record[mlag_address_index]
+                # defined address expected to be properly formatted with prefixlen
+                if mlag_address:
+                    return mlag_address
+            else:
+                raise ValueError('deployment profile "MLAG" not deployed')
+            
+            # not directly defined, not in last deployment, fall back to neighbor
+            mlag_neighbor_index = source['columns'].index('mlag_neighbor')
+            mlag_neighbor_hostname = record[mlag_neighbor_index]
+
+            # break tie via hostname
+            # this will either get the static mlag_address in the MLAG deployment profile or global space
+            mlag_network = searchConfig('mlag_network')
+
+            if mlag_neighbor_hostname and mlag_network:
+                mlag_network = ip_network(mlag_network if '/' in mlag_network else mlag_network + '/31', False)
+                if self.hostname.lower() < mlag_neighbor_hostname.lower():
+                    return str(next(mlag_network.hosts())) + '/' + str(mlag_network.prefixlen)
+                else:
+                    return str(list(mlag_network.hosts())[1]) + '/' + str(mlag_network.prefixlen)
+
+        except Deployment.DoesNotExist:
+            LOGGER.log_noTs('-exception in mlag_address: deployment profile "MLAG" not found', "orange")
+        except StopIteration:
+            LOGGER.log_noTs('-exception in mlag_address: not defined in "MLAG" deployment profile', "orange")
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            LOGGER.log_noTs("-exception in mlag_address: {0}".format(e), "orange")
+
+        mlag_vlan = searchConfig('mlag_vlan', default='4094')
+        LOGGER.log_noTs("--trying telemetry", "orange")
+        return self.telemetry['/Sysdb/ip/config/ipIntfConfig/Vlan{0}/addrWithMask'.format(mlag_vlan)]
+
+
+    @mlag_address.setter
+    def mlag_address(self, mlag_address):
+        if mlag_address:
+            self._mlag_address = mlag_address if '/' in mlag_address else mlag_address + '/31'
+
+    @property
+    def mlag_peer_address(self):
+        try:
+            return self._mlag_peer_address
+        except:
+            pass
+
+        try:
+            d = Deployment.objects.get(name='MLAG')
+
+            if self.__context__ == 'current' and MANAGER.name == "MLAG":
+                source = d.current_deployment_var['device_vars']['Tab0']
+                record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+            elif d.last_deployment:
+                source = d.last_deployed_var['device_vars']['Tab0']
+                record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+                mlag_peer_address_index = source['columns'].index('mlag_peer_address')
+                mlag_peer_address = record[mlag_peer_address_index]
+
+                # defined peer address
+                if mlag_peer_address:
+                    return mlag_peer_address
+            else:
+                raise ValueError('deployment profile "MLAG" not deployed')
+
+
+            mlag_neighbor_index = source['columns'].index('mlag_neighbor')
+            mlag_neighbor_hostname = record[mlag_neighbor_index]
+            # break tie via hostname
+            mlag_address = self.mlag_address
+            if mlag_neighbor_hostname and mlag_address:
+                mlag_network = ip_network(mlag_address, False)
+                available_hosts = set(list(mlag_network.hosts()))
+                available_hosts.remove(ip_address(mlag_address.split('/')[0]))
+                return next(iter(available_hosts))
+
+        except Deployment.DoesNotExist:
+            LOGGER.log_noTs('-exception in mlag_peer_address: deployment profile "MLAG" not found', "orange")
+        except StopIteration:
+            LOGGER.log_noTs('-exception in mlag_peer_address: not defined in "MLAG" deployment profile', "orange")
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            LOGGER.log_noTs("-exception in mlag_peer_address: {0}".format(e), "orange")
+
+        LOGGER.log_noTs("--trying telemetry", "orange")
+        return self.telemetry['/Sysdb/mlag/config/peerAddress']
+
+    @mlag_peer_address.setter
+    def mlag_peer_address(self, mlag_peer_address):
+        if mlag_peer_address:
+            self._mlag_peer_address = mlag_peer_address
+
+    
 
         
 class Configlet:
@@ -461,8 +740,9 @@ class Configlet:
             valueDict.pop('error')
             template = Configlet.jinjaenv.from_string(self.template).render(**valueDict)
         except Exception as e:
-            return ('', [str(e)])
-        return (template, [])
+            LOGGER.log_noTs("-exception compiling: {0}".format(e), "red")
+            return ''
+        return template
 
 
 class Manager:
@@ -495,44 +775,45 @@ class Manager:
             self.previous_device_vars = {}
             d = self.last_deployed_var
 
-            if self.mode == "nested":
-                try:
-                    for spineSerialNumber in d['device_vars'].keys():
-                        #spine = self.previous_device_vars.setdefault(spineSerialNumber, {})
+            if self.last_deployment:
+                if self.mode == "nested":
+                    try:
+                        for spineSerialNumber, collection in d['device_vars'].items():
+                            #spine = self.previous_device_vars.setdefault(spineSerialNumber, {})
 
-                        for row in d['device_vars'][spineSerialNumber]['data']:
+                            for leaf_data_row in collection['data']:
 
-                            if not any(row):
+                                if not any(leaf_data_row):
+                                    continue
+
+                                # row[0] -> serialNumber
+                                # these will be individual leaf records with spine references
+                                leaf = self.previous_device_vars.setdefault(leaf_data_row[0], {})
+                                # sN and host indexes are known
+                                leaf['serialNumber'] = leaf_data_row[0]
+                                leaf['hostname'] = leaf_data_row[1]
+                                
+                                # init rows to list and prevent overwrite and allow appending to
+                                leaf_row = leaf.setdefault('data', [])
+                                # for multiple leaf records in each spine tab append the data to 'rows' with sN and host stripped out
+                                rest_of_leaf_data = dict(zip(collection['columns'][2:], leaf_data_row[2:]))
+                                # each row will have a parent spine pointer
+                                rest_of_leaf_data['spine'] = spineSerialNumber
+                                leaf_row.append(rest_of_leaf_data)
+                                
+
+                    except KeyError as e:
+                        LOGGER.log_noTs("-exception in manager init: {0}".format(e), "red")
+                else:
+                    try:
+                        for data_row in d['device_vars']['Tab0']['data']:
+                            if not any(data_row):
                                 continue
-
-                            # row[0] -> serialNumber
-                            # these will be individual leaf records with spine references
-                            leaf = self.previous_device_vars.setdefault(row[0], {})
-                            # sN and host indexes are known
-                            leaf['serialNumber'] = row[0]
-                            leaf['hostname'] = row[1]
-                            
-                            # init rows to list and prevent overwrite and allow appending to
-                            leaf_row = leaf.setdefault('data', [])
-                            # for multiple leaf records in each spine tab append the data to 'rows' with sN and host stripped out
-                            rest_of_leaf_data = dict(zip(d['device_vars'][spineSerialNumber]['columns'][2:], row[2:]))
-                            # each row will have a parent spine pointer
-                            rest_of_leaf_data['spine'] = spineSerialNumber
-                            leaf_row.append(rest_of_leaf_data)
-                            
-
-                except Exception as e:
-                    print(e)
-            else:
-                try:
-                    for row in d['device_vars']['Tab0']['data']:
-                        if not any(row):
-                            continue
-                        _vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'], row))
-                        _vars['__link__'] = row
-                        self.previous_device_vars[_vars['serialNumber']] = _vars
-                except Exception as e:
-                    print(e)
+                            _vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'], data_row))
+                            _vars['__link__'] = data_row
+                            self.previous_device_vars[_vars['serialNumber']] = _vars
+                    except KeyError as e:
+                        LOGGER.log_noTs("-exception in manager init: {0}".format(e), "red")
         else:
             self.dbRecord = Deployment()
             self.last_deployment = 0
@@ -568,45 +849,45 @@ class Manager:
         if self.mode == "nested":
 
             try:
-                for spineSerialNumber in d['device_vars'].keys():
+                for spineSerialNumber, collection in d['device_vars'].items():
                     # spine = self.current_device_vars.setdefault(spineSerialNumber, {})
 
-                    for row in d['device_vars'][spineSerialNumber]['data']:
+                    for leaf_data_row in collection['data']:
 
-                        if not any(row):
+                        if not any(leaf_data_row):
                             continue
 
                         # row[0] -> serialNumber
                         # these will be individual leaf records with spine references
-                        leaf = self.current_device_vars.setdefault(row[0], {})
+                        leaf = self.current_device_vars.setdefault(leaf_data_row[0], {})
                         # sN and host indexes are known
-                        leaf['serialNumber'] = row[0]
-                        leaf['hostname'] = row[1]
+                        leaf['serialNumber'] = leaf_data_row[0]
+                        leaf['hostname'] = leaf_data_row[1]
                         
                         # init rows to list and prevent overwrite and allow appending to
                         leaf_row = leaf.setdefault('data', [])
                         # for multiple leaf records in each spine tab append the data to 'rows' with sN and host stripped out
-                        rest_of_leaf_data = dict(zip(d['device_vars'][spineSerialNumber]['columns'][2:], row[2:]))
+                        rest_of_leaf_data = dict(zip(collection['columns'][2:], leaf_data_row[2:]))
                         # each row will have a parent spine pointer
                         rest_of_leaf_data['spine'] = spineSerialNumber
                         leaf_row.append(rest_of_leaf_data)
                             
 
-            except Exception as e:
-                print(e)
+            except KeyError as e:
+                LOGGER.log_noTs("-exception in manager init: {0}".format(e), "red")
         else:
             try:
-                for row in d['device_vars']['Tab0']['data']:
-                    if not any(row):
+                for data_row in d['device_vars']['Tab0']['data']:
+                    if not any(data_row):
                         continue
-                    _vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'], row))
-                    _vars['__link__'] = row
+                    _vars = OrderedDict(zip(d['device_vars']['Tab0']['columns'], data_row))
+                    _vars['__link__'] = data_row
                     self.current_device_vars[_vars['serialNumber']] = _vars
-            except Exception as e:
-                print(e)
+            except KeyError as e:
+                LOGGER.log_noTs("-exception in manager init: {0}".format(e), "red")
 
     def stageDeployment(self, d, loadInventory=True,  loadConfiglets=True, loadContainers=False, skipCvp=False):
-        LOGGER.log_noTs("-initializing internal state: please wait...")
+        LOGGER.log_noTs("-initializing internal state: please wait...", "blue")
 
         self.COMPILE_FOR = []
         self.DEVICES = {}
@@ -618,22 +899,22 @@ class Manager:
         CVP.loadContainers() if loadContainers else None
 
         if d == 'current':
-            d = self.current_deployment_var
+            _d = self.current_deployment_var
             device_vars = self.current_device_vars
         elif d == 'last':
-            d = self.last_deployed_var
+            _d = self.last_deployed_var
             device_vars = self.previous_device_vars
 
         self.CONFIG = {'global': Global_Config.objects.get(name='master').params}
 
         # fix disjointed keys/values from UI
         variables = {}
-        if 'variables' in d:
-            variables = dict(zip(d['variables']['keys'], d['variables']['values']))
+        if 'variables' in _d:
+            variables = dict(zip(_d['variables']['keys'], _d['variables']['values']))
         
         iterables = {}
-        if 'iterables' in d:
-            for tab, collection in d['iterables'].items():
+        if 'iterables' in _d:
+            for tab, collection in _d['iterables'].items():
                 tab = tab.replace('#','')
                 iterables[tab] = []
                 # collection is an object with keys: data, columns
@@ -641,13 +922,13 @@ class Manager:
                     # skip blank rows
                     if not any(row):
                         continue
-                    iterables[tab].append(dict(zip(collection['columns'], row)))
+                    iterables[tab].append(dict(zip(collection['columns'], row)))   
 
         if self.mode == 'nested':
 
             for serialNumber in searchConfig('spines'):
                 _cvp_record = CVP.getBySerial(serialNumber)
-                self.COMPILE_FOR.append(Switch(params = {'data':[]}, cvpDevice = _cvp_record if _cvp_record else {'serialNumber': serialNumber, 'hostname': 'NOT_IN_CVP'}))
+                self.COMPILE_FOR.append(Switch(params = {'data':[], '__context__':d}, cvpDevice = _cvp_record if _cvp_record else {'serialNumber': serialNumber, 'hostname': 'NOT_IN_CVP'}))
 
             for serialNumber, data in device_vars.items():
 
@@ -672,25 +953,31 @@ class Manager:
 
 
         else:
-            for serialNumber in searchSource('compile_for', d, []):
-                device = Switch(searchSource(serialNumber, device_vars, {}))
+            for serialNumber in searchSource('compile_for', _d, []):
+                device = Switch({**searchSource(serialNumber, device_vars, {}), '__context__':d})
 
                 if not skipCvp and device.loadCVPRecord():
                     device.loadCVPConfiglets()
                 self.COMPILE_FOR.append(device)
+            
+            # make sure unselected spines are also loaded
+            for serialNumber in searchConfig('spines'):
+                if not getBySerial(serialNumber):
+                    _cvp_record = CVP.getBySerial(serialNumber)
+                    Switch(params = {'__context__':d}, cvpDevice = _cvp_record if _cvp_record else {'serialNumber': serialNumber, 'hostname': 'NOT_IN_CVP'})
 
         self.CONFIG = {**variables, **iterables, **self.CONFIG}
-        self.CONFIG['selected_templates'] = searchSource('selected_templates', d, [])
+        self.CONFIG['selected_templates'] = searchSource('selected_templates', _d, [])
         self.CONFIG['name'] = self.name
                 
     def stageTasks(self):
-        LOGGER.log_noTs("-staging builder tasks")
+        LOGGER.log_noTs("-staging builder tasks", "blue")
             
         selected_templates = searchConfig('selected_templates')
         spines = searchConfig('spines')
 
         if not (spines):
-            LOGGER.log('-spines must be defined in the global master config; aborting')
+            LOGGER.log('-spines must be defined in the global master config; aborting', "red")
             return False
 
         for device in self.COMPILE_FOR:    
@@ -714,7 +1001,7 @@ class Manager:
             self.tasks_to_deploy = []
             
         else:
-            LOGGER.log("-last deployment record does not exist; aborting")
+            LOGGER.log("-last deployment record does not exist; aborting", "red")
         LOGGER.log("Done: Sync")
          
     def verifyLastDeployment(self):
@@ -774,20 +1061,20 @@ class Manager:
 
         elif self.mode == "nested":
 
-            old_compile_for = set()
-            new_compile_for = set()
+            old_compile_for = []
+            new_compile_for = []
 
-            for spine_serial_number, leafs in self.last_deployed_var.items():
-                old_compile_for.add(spine_serial_number)
+            for spine_serial_number, collection in self.last_deployed_var['device_vars'].items():
+                old_compile_for.append(spine_serial_number)
 
-                for leaf_serial_number in leafs.keys():
-                    old_compile_for.add(leaf_serial_number)
+                for leaf_serial_number in [r[0] for r in collection['data'] if r[0]]:
+                    old_compile_for.append(leaf_serial_number)
 
-            for spine_serial_number, leafs in self.current_deployment_var.items():
-                new_compile_for.add(spine_serial_number)
+            for spine_serial_number, collection in self.current_deployment_var['device_vars'].items():
+                new_compile_for.append(spine_serial_number)
 
-                for leaf_serial_number in leafs.keys():
-                    new_compile_for.add(leaf_serial_number)
+                for leaf_serial_number in [r[0] for r in collection['data'] if r[0]]:
+                    new_compile_for.append(leaf_serial_number)
 
         old_templates = searchSource('selected_templates', self.last_deployed_var, [])
         new_templates = self.current_deployment_var['selected_templates']
@@ -850,17 +1137,17 @@ class Manager:
                         # in turn if all is well this updates in the DB
                         link[:] = list(varsDict)[:-1]
                 except (CvpApiError) as e:
-                    LOGGER.log_noTs("--exception moving containers, please try again; aborting")
-                    LOGGER.log_noTs(e)
+                    LOGGER.log_noTs("--exception moving containers, please try again; aborting", "red")
+                    LOGGER.log_noTs("-exception: {0}".format(e), "red")
                     return False
             
             if toRemove:
                 try:
                     if device:
-                        LOGGER.log_noTs('--unassigning configlets from {0}'.format(searchSource('hostname', device, 'no_hostname_error')))
+                        LOGGER.log_noTs('--unassigning configlets from {0}'.format(searchSource('hostname', device, 'no_hostname_error')), "green")
                         CVP.cvprac.api.remove_configlets_from_device('builder', device, toRemove)
                     for c in toRemove:
-                        LOGGER.log_noTs('--removing configlet {0}'.format(searchSource('name', c, 'no_name_error')))
+                        LOGGER.log_noTs('--removing configlet {0}'.format(searchSource('name', c, 'no_name_error')), "green")
                         CVP.cvprac.api.delete_configlet(c['name'], c['key'])
                     if serialNumber in removeDevices:
                         self.last_deployed_var['compile_for'].remove(serialNumber)
@@ -870,8 +1157,8 @@ class Manager:
                     
                 except (CvpApiError) as e:
                     
-                    LOGGER.log_noTs("--exception deleting configlets (979), please try again; aborting")
-                    LOGGER.log_noTs(e)
+                    LOGGER.log_noTs("--exception deleting configlets (979), please try again; aborting", "red")
+                    LOGGER.log_noTs("-exception: {0}".format(e), "red")
                     return False
 
                 
@@ -885,11 +1172,12 @@ class Manager:
             self.dbRecord.last_deployed_var = self.last_deployed_var
             self.dbRecord.save()
         except dbError as e:
-            LOGGER.log_noTs('--error updating last deployment in DB to reflect removed CVP records (line1016); aborting')
-            LOGGER.log_noTs('--please update the DB manually, last deployment should be:')
+            LOGGER.log_noTs('--error updating last deployment in DB to reflect removed CVP records (line1016); aborting', "red")
+            LOGGER.log_noTs('--please update the DB manually, last deployment should be:','red')
+            LOGGER.log_noTs("-exception: {0}".format(e), "red")
             LOGGER.log_noTs(json.dumps(self.last_deployed_var))
             LOGGER.log_noTs('')
-            LOGGER.log_noTs(e)
+            
             return False
         LOGGER.log_noTs("-done running pre deployment checks and cleanup")
         LOGGER.log_noTs("")
@@ -908,11 +1196,11 @@ class Manager:
                 self.dbRecord.current_deployment_var = self.current_deployment_var
                 self.dbRecord.save()
             except (dbError) as e:
-                LOGGER.log_noTs('-error saving current deployment (line952); aborting')
-                LOGGER.log_noTs('-following should manually pushed to DB as the current deployment:')
+                LOGGER.log_noTs('-error saving current deployment (saveAndDeploy); aborting', "red")
+                LOGGER.log_noTs('-following should manually pushed to DB as the current deployment:', "red")
+                LOGGER.log_noTs("-exception: {0}".format(e), "red")
                 LOGGER.log_noTs(json.dumps(self.current_deployment_var, indent=4))
                 LOGGER.log_noTs('')
-                LOGGER.log_noTs(e)
                 return False
             
             # when sync returns it should have removed all configlets and updated last_deployed_var to reflect those removals
@@ -925,11 +1213,11 @@ class Manager:
                     self.dbRecord.last_deployed_var = self.current_deployment_var
                     self.dbRecord.save()
                 except dbError as e:
-                    LOGGER.log_noTs('-error pushing current deployment vars into history (line1016); aborting')
-                    LOGGER.log_noTs('-following should manually pushed to DB as current/last after which \"Sync\" should fix state:')
+                    LOGGER.log_noTs('-error pushing current deployment vars into history (line1016); aborting', "red")
+                    LOGGER.log_noTs('-following should manually pushed to DB as current/last after which \"Sync\" should fix state:', "red")
+                    LOGGER.log_noTs("-exception: {0}".format(e), "red")
                     LOGGER.log_noTs(json.dumps(self.current_deployment_var,indent=4))
                     LOGGER.log_noTs('')
-                    LOGGER.log_noTs(e)
                     return False
                 
                 # inventory and containers loaded in _verifyLastDeployment()
@@ -951,7 +1239,8 @@ class Manager:
                 self.dbRecord.current_deployment_var = self.current_deployment_var
                 self.dbRecord.save()
             except dbError as e:
-                LOGGER.log_noTs('-error creating deployment (line952); aborting')
+                LOGGER.log_noTs('-error creating deployment (first deployment); aborting', "red")
+                LOGGER.log_noTs("-exception: {0}".format(e), "red")
                 LOGGER.log_noTs(json.dumps(self.fromUI,indent=4))
                 return False
             
@@ -961,7 +1250,8 @@ class Manager:
                     self.dbRecord.last_deployed_var = self.current_deployment_var
                     self.dbRecord.save()
                 except dbError as e:
-                    LOGGER.log_noTs('-error creating deployment (line1113); aborting')
+                    LOGGER.log_noTs('-error creating deployment (first deployment); aborting', "red")
+                    LOGGER.log_noTs("-exception: {0}".format(e), "red")
                     LOGGER.log_noTs(json.dumps(self.fromUI,indent=4))
                     return False
                 
@@ -1005,12 +1295,12 @@ def show_diff(text, n_text):
         if opcode == 'equal':
             previous = str(seqm.a[a0:a1])
         elif opcode == 'insert':
-            output.append('...' + previous[-14:] + "<font color=red style='background:chartreuse'>^" + seqm.b[b0:b1] + "</font>")
+            output.append('...' + previous[-14:] + "<font color=red style='background:chartreuse'>^" + seqm.b[b0:b1] + "")
         elif opcode == 'delete':
-            output.append('...' + previous[-14:] + "<font color=blue style='background:chartreuse'>^" + seqm.a[a0:a1] + "</font>")
+            output.append('...' + previous[-14:] + "<font color=blue style='background:chartreuse'>^" + seqm.a[a0:a1] + "")
         elif opcode == 'replace':
             # seqm.a[a0:a1] -> seqm.b[b0:b1]
-            output.append('...' + previous[-14:] + "<font color=green style='background:chartreuse'>^" + seqm.b[b0:b1] + "</font>")
+            output.append('...' + previous[-14:] + "<font color=green style='background:chartreuse'>^" + seqm.b[b0:b1] + "")
         else:
             raise RuntimeError("unexpected opcode")
     return ''.join(output)
@@ -1035,7 +1325,7 @@ def searchConfig(key, default = None):
         config = MANAGER.CONFIG[key]
     except:
         pass
-    if config == default:
+    if not config:
         try:
             config = MANAGER.CONFIG['global'][key]
         except:
@@ -1054,10 +1344,10 @@ def searchConfig(key, default = None):
 
 def getKeyDefinition(key, source):
     toReturn = searchSource(key, source) or searchConfig(key)
-    if toReturn == 'ERROR' or not toReturn:
-        toReturn = None
-            
-    return toReturn
+    if toReturn == 'STOP' or not toReturn:
+        LOGGER.log_noTs("--{0} not found".format(key), "red")
+
+    return None if toReturn == 'STOP' else toReturn
 
 def buildValueDict(source, template):
     valueDict = {}
@@ -1075,6 +1365,7 @@ def buildValueDict(source, template):
             valueDict['error'].append(key)
         else:
             valueDict[key] = defined
+    print(valueDict)
     return valueDict
 
 def getBySerial(serialNumber):
@@ -1133,8 +1424,8 @@ def main():
                     try:
                         CVP = Cvp()
                     except (ImportError, CvpClientError) as e:
-                        LOGGER.log("Failed to init CVP")
-                        LOGGER.log_noTs(e)
+                        LOGGER.log("Failed to init CVP", "red")
+                        LOGGER.log_noTs("-exception: {0}".format(e), "red")
                         continue
                     
                     
