@@ -74,25 +74,29 @@ class Telemetry(MutableMapping):
             try:
                 found = CVP.cvprac.get('/api/v1/rest/' + self.serialNumber.upper() + path)
                 if not found['notifications']:
-                    LOGGER.log_noTs("-telemetry data for {0} not found".format(path+'/'+key), "red")
-                    return 'STOP'
-                found = found['notifications'][0]['updates'][key]['value']
-                if found:
-                    if type(found) == dict:
-                        __keys = found.keys()
+                    LOGGER.log_noTs("-telemetry data for {0} not found".format(path+'#'+key), "red")
+                    return ''
+                source = found['notifications']
+                for item in source:
+                    if key in item['updates']:
+                        source = item['updates'][key]['value']
+
+                if source:
+                    if type(source) == dict:
+                        __keys = source.keys()
                         if 'Value' in __keys:
-                            found = found['Value']
+                            source = source['Value']
                         elif 'value' in __keys:
-                            found = found['value']
-                        _type, val = next(iter(found.items()))
+                            source = source['value']
+                        _type, val = next(iter(source.items()))
                         return val
                     else:
-                        return found
+                        return source
             except (KeyError, IndexError, CvpClientError, CvpApiError) as e:
-                LOGGER.log_noTs("-failed to properly fetch/decode telemetry data for {0}".format(path+'/'+key), "red")
+                LOGGER.log_noTs("-failed to properly fetch/decode telemetry data for {0}".format(path+'#'+key), "red")
                 LOGGER.log_noTs("-exception: {0}".format(e), "red")
 
-        return 'STOP'
+        return ''
 
     
  
@@ -445,25 +449,31 @@ class Switch:
           
     @property
     def spine_lo0_list(self):
-        return [spine.loopback0 for spine in MANAGER.SPINES if spine.loopback0]
+        return [(spine.hostname, spine.loopback0) for spine in MANAGER.SPINES if spine.loopback0]
         
     
     @property
     def spine_lo1_list(self):
-        return [spine.loopback1 for spine in MANAGER.SPINES if spine.loopback1]
+        return [(spine.hostname, spine.loopback1) for spine in MANAGER.SPINES if spine.loopback1]
     
     @property
-    def to_spine__hostname_ip__tuple_list(self):
+    def spine_uplinks(self):
         found = []
         try:   
-            # this is expected to be a "nested" deployment profile
-            d = Deployment.objects.get(name='Underlay')
-
+            source = None
+            
             if self.__context__ == 'current' and MANAGER.name == 'Underlay':
-                source = d.current_deployment_var['device_vars']
-            elif d.last_deployment:
-                source = d.last_deployed_var['device_vars']
+                # go this route if we are debugging the current context from the MLAG deployment profile itself but mlag_address was not explicitly defined
+                source = MANAGER.current_deployment_var['device_vars']
             else:
+                # otherwise always use the last deployed data
+                # this is expected to be a "nested" deployment profile
+                d = Deployment.objects.get(name='Underlay')
+
+                if d.last_deployment:
+                    source = d.last_deployed_var['device_vars']
+
+            if not source:
                 raise ValueError('deployment profile "Underlay" not deployed')
 
             for spine_serial_number, collection in source.items():
@@ -495,14 +505,20 @@ class Switch:
             pass
 
         try:
-            # this is expected to be a "flat" deployment profile
-            d = Deployment.objects.get(name='Loopback')
-
+            source = record = None
+            
             if self.__context__ == 'current' and MANAGER.name == 'Loopback':
-                source = d.current_deployment_var['device_vars']['Tab0']
-            elif d.last_deployment:
-                source = d.last_deployed_var['device_vars']['Tab0']
+                # go this route if we are debugging the current context from the MLAG deployment profile itself but mlag_address was not explicitly defined
+                source = MANAGER.current_deployment_var['device_vars']['Tab0']
             else:
+                # otherwise always use the last deployed data
+                # this is expected to be a "flat" deployment profile
+                d = Deployment.objects.get(name='Loopback')
+
+                if d.last_deployment:
+                    source = d.last_deployed_var['device_vars']['Tab0']
+
+            if not source:
                 raise ValueError('deployment profile "Loopback" not deployed')
             
             record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
@@ -535,14 +551,20 @@ class Switch:
             pass
 
         try:
-            # this is expected to be a "flat" deployment profile
-            d = Deployment.objects.get(name='Loopback')
-
+            source = record = None
+            
             if self.__context__ == 'current' and MANAGER.name == 'Loopback':
-                source = d.current_deployment_var['device_vars']['Tab0']
-            elif d.last_deployment:
-                source = d.last_deployed_var['device_vars']['Tab0']
+                # go this route if we are debugging the current context from the MLAG deployment profile itself but mlag_address was not explicitly defined
+                source = MANAGER.current_deployment_var['device_vars']['Tab0']
             else:
+                # otherwise always use the last deployed data
+                # this is expected to be a "flat" deployment profile
+                d = Deployment.objects.get(name='Loopback')
+
+                if d.last_deployment:
+                    source = d.last_deployed_var['device_vars']['Tab0']
+
+            if not source:
                 raise ValueError('deployment profile "Loopback" not deployed')
 
             record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
@@ -574,14 +596,20 @@ class Switch:
             pass
 
         try:
-            # this is expected to be a "flat" deployment profile
-            d = Deployment.objects.get(name='Loopback')
-
+            source = record = None
+            
             if self.__context__ == 'current' and MANAGER.name == 'Loopback':
-                source = d.current_deployment_var['device_vars']['Tab0']
-            elif d.last_deployment:
-                source = d.last_deployed_var['device_vars']['Tab0']
+                # go this route if we are debugging the current context from the MLAG deployment profile itself but mlag_address was not explicitly defined
+                source = MANAGER.current_deployment_var['device_vars']['Tab0']
             else:
+                # otherwise always use the last deployed data
+                # this is expected to be a "flat" deployment profile
+                d = Deployment.objects.get(name='Loopback')
+
+                if d.last_deployment:
+                    source = d.last_deployed_var['device_vars']['Tab0']
+
+            if not source:
                 raise ValueError('deployment profile "Loopback" not deployed')
 
             record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
@@ -612,28 +640,32 @@ class Switch:
             return self._mlag_address
         except:
             pass
-
+        
         # try to find data in the MLAG deployment profile
         try:
-            # this is expected to be a "flat" deployment profile
-            d = Deployment.objects.get(name='MLAG')
+            source = record = None
             
-            # go this route if we are debugging the current context from the MLAG deployment profile itself
             if self.__context__ == 'current' and MANAGER.name == 'MLAG':
-                source = d.current_deployment_var['device_vars']['Tab0']
+                # go this route if we are debugging the current context from the MLAG deployment profile itself but mlag_address was not explicitly defined
+                source = MANAGER.current_deployment_var['device_vars']['Tab0']
                 record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
-            # otherwise always use the last deployed data
-            elif d.last_deployment:
-                source = d.last_deployed_var['device_vars']['Tab0']
-                record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
-
-                #maybe it's defined in the last deployment?
-                mlag_address_index = source['columns'].index('mlag_address')
-                mlag_address = record[mlag_address_index]
-                # defined address expected to be properly formatted with prefixlen
-                if mlag_address:
-                    return mlag_address
             else:
+                # otherwise always use the last deployed data
+                # this is expected to be a "flat" deployment profile
+                d = Deployment.objects.get(name='MLAG')
+
+                if d.last_deployment:
+                    source = d.last_deployed_var['device_vars']['Tab0']
+                    record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+
+                    #maybe it's defined in the last deployment?
+                    mlag_address_index = source['columns'].index('mlag_address')
+                    mlag_address = record[mlag_address_index]
+                    # defined address expected to be properly formatted with prefixlen
+                    if mlag_address:
+                        return mlag_address
+            
+            if not source:
                 raise ValueError('deployment profile "MLAG" not deployed')
             
             # not directly defined, not in last deployment, fall back to neighbor
@@ -676,21 +708,28 @@ class Switch:
             pass
 
         try:
-            d = Deployment.objects.get(name='MLAG')
-
-            if self.__context__ == 'current' and MANAGER.name == "MLAG":
-                source = d.current_deployment_var['device_vars']['Tab0']
+            source = record = None
+            
+            if self.__context__ == 'current' and MANAGER.name == 'MLAG':
+                # go this route if we are debugging the current context from the MLAG deployment profile itself but mlag_address was not explicitly defined
+                source = MANAGER.current_deployment_var['device_vars']['Tab0']
                 record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
-            elif d.last_deployment:
-                source = d.last_deployed_var['device_vars']['Tab0']
-                record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
-                mlag_peer_address_index = source['columns'].index('mlag_peer_address')
-                mlag_peer_address = record[mlag_peer_address_index]
-
-                # defined peer address
-                if mlag_peer_address:
-                    return mlag_peer_address
             else:
+                # otherwise always use the last deployed data
+                # this is expected to be a "flat" deployment profile
+                d = Deployment.objects.get(name='MLAG')
+
+                if d.last_deployment:
+                    source = d.last_deployed_var['device_vars']['Tab0']
+                    record = next(iter([r for r in source['data'] if r[0] == self.serialNumber]))
+                    mlag_peer_address_index = source['columns'].index('mlag_peer_address')
+                    mlag_peer_address = record[mlag_peer_address_index]
+
+                    # defined peer address
+                    if mlag_peer_address:
+                        return mlag_peer_address
+
+            if not source:
                 raise ValueError('deployment profile "MLAG" not deployed')
 
 
@@ -702,7 +741,7 @@ class Switch:
                 mlag_network = ip_network(mlag_address, False)
                 available_hosts = set(list(mlag_network.hosts()))
                 available_hosts.remove(ip_address(mlag_address.split('/')[0]))
-                return next(iter(available_hosts))
+                return str(next(iter(available_hosts)))
 
         except Deployment.DoesNotExist:
             LOGGER.log_noTs('-exception in mlag_peer_address: deployment profile "MLAG" not found', "orange")
@@ -718,9 +757,6 @@ class Switch:
     def mlag_peer_address(self, mlag_peer_address):
         if mlag_peer_address:
             self._mlag_peer_address = mlag_peer_address
-
-    
-
         
 class Configlet:
     jinjaenv = Environment(trim_blocks=True, lstrip_blocks=True)
@@ -1295,12 +1331,12 @@ def show_diff(text, n_text):
         if opcode == 'equal':
             previous = str(seqm.a[a0:a1])
         elif opcode == 'insert':
-            output.append('...' + previous[-14:] + "<font color=red style='background:chartreuse'>^" + seqm.b[b0:b1] + "")
+            output.append('...' + previous[-33:] + "<font color=red style='background:chartreuse'>^" + seqm.b[b0:b1] + "</font>")
         elif opcode == 'delete':
-            output.append('...' + previous[-14:] + "<font color=blue style='background:chartreuse'>^" + seqm.a[a0:a1] + "")
+            output.append('...' + previous[-33:] + "<font color=blue style='background:chartreuse'>^" + seqm.a[a0:a1] + "</font>")
         elif opcode == 'replace':
             # seqm.a[a0:a1] -> seqm.b[b0:b1]
-            output.append('...' + previous[-14:] + "<font color=green style='background:chartreuse'>^" + seqm.b[b0:b1] + "")
+            output.append('...' + previous[-33:] + "<font color=green style='background:chartreuse'>^" + seqm.b[b0:b1] + "</font>")
         else:
             raise RuntimeError("unexpected opcode")
     return ''.join(output)
