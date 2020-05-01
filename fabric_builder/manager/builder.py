@@ -1383,7 +1383,7 @@ def getKeyDefinition(key, source):
     if toReturn == 'STOP' or not toReturn:
         LOGGER.log_noTs("--{0} not found".format(key), "red")
 
-    return None if toReturn == 'STOP' else toReturn
+    return '' if toReturn == 'STOP' else toReturn
 
 def buildValueDict(source, template):
     valueDict = {}
